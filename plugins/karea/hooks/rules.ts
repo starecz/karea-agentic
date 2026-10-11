@@ -491,6 +491,101 @@ export function diffSnapshots(before: Snapshot, after: Snapshot): string[] {
   return lines
 }
 
+// karea_task_changes (KA748) answers for one task over the last 1 to 60 minutes.
+export const CHANGES_MAX_MINUTES = 60
+
+export type TaskChange = { at: number; stamp: string; text: string; by: string; mode: string }
+
+// Minutes to ask for: the time since the last check, plus one for clock drift. Undefined when the gap is
+// longer than the server can answer for, so the caller re-reads the task instead.
+export function changesWindow(lastCheckAt: number, now: number): number | undefined {
+  if (lastCheckAt <= 0) return undefined
+  const minutes = Math.ceil((now - lastCheckAt) / 60000)
+  if (minutes > CHANGES_MAX_MINUTES) return undefined
+  return Math.min(CHANGES_MAX_MINUTES, Math.max(1, minutes + 1))
+}
+
+// A server from before karea_task_changes refuses the action by name.
+export function isUnknownAction(text: string | undefined): boolean {
+  return /Unknown action|is not a Karea action|is an action of /.test(text ?? '')
+}
+
+const CHANGE_ROW = /^- (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) (.+) · by (.+) \(([\w-]+)\)\s*$/
+
+// Rows look like "- 2026-10-07T11:17:53Z status: open -> blocked · by Alex (user)", newest first.
+export function parseTaskChanges(text: string): TaskChange[] {
+  const rows: TaskChange[] = []
+  for (const line of text.split('\n')) {
+    const match = line.match(CHANGE_ROW)
+    if (!match?.[1] || !match[2] || !match[3] || !match[4]) continue
+    rows.push({ at: Date.parse(match[1]), stamp: match[1], text: match[2], by: match[3], mode: match[4] })
+  }
+  return rows
+}
+
+export function changeKey(row: TaskChange): string {
+  return `${row.stamp} ${row.text} ${row.by} ${row.mode}`
+}
+
+const QUIET_LABELS = new Set(['closed by', 'custom status', 'mcp hint clicked at', 'recap generated', 'email overdue'])
+
+// Only what a person changed, in the browser (user) or through Karea AI (ai). The session's own writes come
+// back as mcp and are left out, like Jira and system rows.
+export function personChanges(rows: readonly TaskChange[], since: number, seen: readonly string[]): TaskChange[] {
+  return rows
+    .filter(row => PERSON_MODES.has(row.mode) && row.at > since && !seen.includes(changeKey(row)))
+    .filter(row => !QUIET_LABELS.has(row.text.split(':')[0]?.trim().toLowerCase() ?? ''))
+    .sort((a, b) => a.at - b.at)
+}
+
+export function taskChangeLine(row: TaskChange): string {
+  const note = row.text.match(/^Note (added|edited): "(.*)"$/)
+  if (note) return `${note[1] === 'added' ? 'new note' : 'note edited'}: "${clip(note[2] ?? '', 40)}" (${row.by})`
+  const entry = row.text.match(/^Context entry (created|edited): "(.*)"$/)
+  if (entry) return `context "${entry[2] ?? ''}" ${entry[1] === 'created' ? 'added' : 'edited'} (${row.by})`
+  const field = row.text.match(/^([^:]+): (.+?) -> (.+)$/)
+  if (field) return `${field[1]} ${clip(field[2] ?? '', 20)} → ${clip(field[3] ?? '', 40)} (${row.by})`
+  return `${clip(row.text, 60)} (${row.by})`
+}
+
+// The status the newest status row moved the task to, if any.
+export function statusFromChanges(rows: readonly TaskChange[]): string | undefined {
+  const newest = [...rows].sort((a, b) => b.at - a.at).find(row => /^status: /.test(row.text))
+  return newest?.text.match(/-> ([a-z_]+)$/)?.[1]
+}
+
+// KA759: Karea refuses to close a task with open subtasks until it is told what to do with them.
+export type SubtaskRefusal = { title: string; count: number; subtasks: string[] }
+
+export function subtaskRefusal(text: string | undefined): SubtaskRefusal | undefined {
+  const match = text?.match(/Cannot close "(.+?)" yet: it has (\d+) open subtasks?:\n((?:[ \t]+.*\n?)*)/)
+  if (!match?.[1] || !match[2]) return undefined
+  const subtasks = (match[3] ?? '')
+    .split('\n')
+    .map(line => line.trim().replace(/^- /, ''))
+    .filter(line => line !== '' && !line.startsWith('...'))
+  return { title: match[1], count: Number(match[2]), subtasks }
+}
+
+export const CLOSE_ALL = 'Close them all'
+export const CLOSE_ONLY = 'Close only this task'
+export const KEEP_OPEN = 'Keep it open'
+
+export function subtaskAsk(refusal: SubtaskRefusal): string {
+  const shown = refusal.subtasks.slice(0, 4).join('; ')
+  const more = refusal.count > 4 ? ` and ${refusal.count - 4} more` : ''
+  const them = refusal.count === 1 ? 'it' : 'them'
+  return `Karea did not close "${clip(refusal.title, 50)}": it has ${refusal.count} open subtask${refusal.count === 1 ? '' : 's'} (${shown}${more}). Close ${them} too?`
+}
+
+export function subtaskAnswerContext(answer: string | undefined, action: string, tool: string): string {
+  const call = `${tool} with action ${action} again, with the same params plus`
+  if (answer === CLOSE_ALL) return `Karea refused the close because of open subtasks. The user chose to close them all: call ${call} closeSubtasks: true.`
+  if (answer === CLOSE_ONLY) return `Karea refused the close because of open subtasks. The user chose to close only this task: call ${call} closeSubtasks: false.`
+  if (answer === KEEP_OPEN) return 'Karea refused the close because of open subtasks, and the user chose to keep the task open. Do not close it; carry on with the rest of the sync.'
+  return `Karea refused the close because of open subtasks. Ask the user (one AskUserQuestion) whether to close them all or only this task, then call ${call} closeSubtasks true or false to match the answer.`
+}
+
 export const OPEN_DECISION_TURNS = 40
 export type OpenDecision = { text: string; age: number }
 

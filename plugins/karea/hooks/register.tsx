@@ -50,6 +50,19 @@ import {
   trackOpenDecisions,
   taskRefOf,
   upsertTouched,
+  changeKey,
+  changesWindow,
+  isUnknownAction,
+  parseTaskChanges,
+  personChanges,
+  statusFromChanges,
+  taskChangeLine,
+  subtaskRefusal,
+  subtaskAsk,
+  subtaskAnswerContext,
+  CLOSE_ALL,
+  CLOSE_ONLY,
+  KEEP_OPEN,
 } from './rules'
 import type { Meeting, Preset, ViewedTask } from './rules'
 
@@ -139,6 +152,44 @@ const lastPrompt = atom({ plugin: 'karea', key: 'lastPrompt' } as const, '')
 const turnWrote = atom({ plugin: 'karea', key: 'turnWrote' } as const, false)
 const earlier = atom({ plugin: 'karea', key: 'earlier' } as const, null)
 const openDecisions = atom({ plugin: 'karea', key: 'openDecisions' } as const, [])
+const lastCheckAt = atom({ plugin: 'karea', key: 'lastCheckAt' } as const, 0)
+const seenChanges = atom({ plugin: 'karea', key: 'seenChanges' } as const, [])
+
+// The task picked in each session, kept in the plugin's store so a closed and resumed session gets it back.
+const SESSION_TASKS = 'sessionTasks'
+const MAX_SESSIONS = 200
+type SavedTask = ActiveTask | 'off'
+
+async function currentSessionId($: EngineInterface): Promise<string> {
+  try {
+    return await $.session.id()
+  } catch {
+    return ''
+  }
+}
+
+async function savedTask($: EngineInterface, id: string): Promise<SavedTask | undefined> {
+  if (id === '') return undefined
+  try {
+    const all = (await $.store.get(SESSION_TASKS)) as Record<string, SavedTask> | undefined
+    return all?.[id]
+  } catch {
+    return undefined
+  }
+}
+
+async function saveTask($: EngineInterface, task: SavedTask) {
+  const id = await currentSessionId($)
+  if (id === '') return
+  try {
+    const all = ((await $.store.get(SESSION_TASKS)) as Record<string, SavedTask> | undefined) ?? {}
+    const { [id]: _previous, ...rest } = all
+    const kept = Object.entries(rest).slice(-(MAX_SESSIONS - 1))
+    await $.store.set(SESSION_TASKS, { ...Object.fromEntries(kept), [id]: task })
+  } catch {
+    // remembering the task is a convenience
+  }
+}
 
 type Config = {
   api: Api
@@ -213,23 +264,69 @@ const MEETING_SERVERS = MCP_SERVERS
 let QUESTION_MEETING_SETTING = ''
 let mcpServerInUse = ''
 
+async function kareaMcpRaw(
+  $: EngineInterface,
+  tool: string,
+  action: string,
+  params: Record<string, unknown>,
+): Promise<{ text: string; isError: boolean } | null> {
+  const candidates = cfg.mcpServer ? [cfg.mcpServer] : mcpServerInUse ? [mcpServerInUse] : MCP_SERVERS
+  for (const server of candidates) {
+    try {
+      const result = await $.mcp.call(server, tool, { action, params })
+      mcpServerInUse = server
+      return { text: mcpText(result), isError: result.isError === true }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
 async function kareaMcp(
   $: EngineInterface,
   tool: string,
   action: string,
   params: Record<string, unknown>,
 ): Promise<string | undefined | null> {
-  const candidates = cfg.mcpServer ? [cfg.mcpServer] : mcpServerInUse ? [mcpServerInUse] : MCP_SERVERS
-  for (const server of candidates) {
-    try {
-      const result = await $.mcp.call(server, tool, { action, params })
-      mcpServerInUse = server
-      return result.isError ? undefined : mcpText(result)
-    } catch {
-      continue
-    }
+  const result = await kareaMcpRaw($, tool, action, params)
+  if (result === null) return null
+  return result.isError ? undefined : result.text
+}
+
+// Set once the connected server turns karea_task_changes down; then polls compare snapshots instead.
+let taskChangesUnknown = false
+
+// Asks Karea only for what changed since the last check. False when the server does not know the action.
+async function pollChanges($: EngineInterface, task: ActiveTask, now: number): Promise<boolean> {
+  const ref = task.id || task.shortid
+  const minutes = changesWindow(await read($, lastCheckAt), now)
+  if (minutes === undefined) {
+    const viewed = await kareaMcp($, 'karea_read', 'karea_view_task', { task: ref })
+    const found = viewed ? parseViewTask(viewed) : undefined
+    if (!found) return true
+    await update($, active, current =>
+      current ? { ...current, id: found.id, title: found.title || current.title, status: found.status || current.status } : current,
+    )
+    await update($, lastCheckAt, () => now)
+    await update($, seenChanges, () => [])
+    return true
   }
-  return null
+  const result = await kareaMcpRaw($, 'karea_read', 'karea_task_changes', { task: ref, sinceMinutes: minutes })
+  if (result === null) return true
+  if (isUnknownAction(result.text)) {
+    taskChangesUnknown = true
+    return false
+  }
+  if (result.isError) return true
+  const rows = parseTaskChanges(result.text)
+  const fresh = personChanges(rows, await read($, watermark), await read($, seenChanges))
+  await update($, seenChanges, list => [...list, ...rows.map(changeKey).filter(key => !list.includes(key))].slice(-100))
+  await update($, lastCheckAt, () => now)
+  const status = statusFromChanges(rows)
+  if (status) await update($, active, current => (current ? { ...current, status } : current))
+  await flagRemote($, task.shortid, fresh.map(taskChangeLine), now)
+  return true
 }
 
 async function mcpSnapshot($: EngineInterface, ref: string) {
@@ -307,7 +404,7 @@ async function activate($: EngineInterface, ref: string, setInProgress: boolean)
           task = { ...task, status: 'in_progress' }
         }
       }
-      const fresh = await mcpSnapshot($, task.id)
+      const fresh = setInProgress ? await mcpSnapshot($, task.id) : found
       await update($, snapshot, () => fresh?.snap ?? found.snap)
       const ages = await read($, contextAges)
       const at = await $.clock.now()
@@ -324,9 +421,12 @@ async function activate($: EngineInterface, ref: string, setInProgress: boolean)
   await update($, lastSyncAt, () => 0)
   await update($, remote, () => null)
   await update($, watermark, () => now)
+  await update($, lastCheckAt, () => (task.id ? now : 0))
+  await update($, seenChanges, () => [])
   await update($, lastPromptAt, previous => Math.max(previous, now))
   await rememberTouched($)
   await refreshChip($)
+  await saveTask($, task)
 
   const head = `Active: ${task.shortid}${task.title ? ` ${task.title}` : ''}`
   const warn =
@@ -343,6 +443,7 @@ async function poll($: EngineInterface) {
   if (now - (await read($, lastPromptAt)) > IDLE_POLL_MS) return
 
   if (!cfg.hasApi) {
+    if (!taskChangesUnknown && (await pollChanges($, task, now))) return
     const fresh = await mcpSnapshot($, task.id || task.shortid)
     if (!fresh) return
     await update($, active, current =>
@@ -473,6 +574,39 @@ async function chooseMeeting($: EngineInterface, setting: string, project: strin
   }
 }
 
+// Session start: the task this session had before it was closed, else the one Karea Connect started it for.
+async function restoreTask($: EngineInterface) {
+  const saved = await savedTask($, await currentSessionId($))
+  if (saved === 'off') return
+  const current = await read($, active)
+  const now = await $.clock.now()
+  if (saved) {
+    if (current?.shortid === saved.shortid) return
+    const carried = (await read($, touched)).find(item => item.shortid === saved.shortid)?.pending ?? []
+    await update($, active, () => saved)
+    await update($, pending, () => carried)
+    await update($, remote, () => null)
+    await update($, watermark, () => now)
+    await update($, lastCheckAt, () => 0)
+    return
+  }
+  if (current) return
+  const ref = ((await $.env.get('KAREA_TASK')) ?? '').trim().toUpperCase()
+  if (!isShortId(ref)) return
+  await update($, active, () => ({ shortid: ref, id: '', title: '', status: '' }))
+  $.clock.after(0, () => void autoPick($, ref))
+}
+
+async function autoPick($: EngineInterface, ref: string) {
+  const text = await activate($, ref, false)
+  const task = await read($, active)
+  if (text.startsWith('Could not find') || !task) {
+    await saveTask($, { shortid: ref, id: '', title: '', status: '' })
+    return
+  }
+  $.ui.log(`Karea task ${task.shortid}${task.title ? ` ${task.title}` : ''} is active in this session (from Karea Connect).`)
+}
+
 export const register: Register = (on, options) => {
   QUESTION_MEETING_SETTING = String(options.questionMeeting ?? '')
 
@@ -502,6 +636,7 @@ export const register: Register = (on, options) => {
     $.clock.every(60000, () => void refreshChip($))
     $.ui.status(undefined)
     await update($, pending, list => list.filter(item => !item.startsWith('open question:')))
+    await restoreTask($)
     await refreshChip($)
     return next(e)
   })
@@ -524,6 +659,7 @@ export const register: Register = (on, options) => {
       await update($, pending, () => [])
       await update($, remote, () => null)
       await refreshChip($)
+      await saveTask($, 'off')
       return { text: 'No active Karea task.' }
     }
 
@@ -668,6 +804,14 @@ export const register: Register = (on, options) => {
 
     if (isKareaWrite(tool, input)) {
       const action = kareaAction(tool, input) ?? ''
+      const refusal = subtaskRefusal(ran.text)
+      if (refusal) {
+        const answer = await $.ui
+          .ask(subtaskAsk(refusal), { options: [CLOSE_ALL, CLOSE_ONLY, KEEP_OPEN], header: 'Subtasks' })
+          .catch(() => undefined)
+        $.ui.log(`Karea kept "${refusal.title}" open: it has ${refusal.count} open subtask${refusal.count === 1 ? '' : 's'}${answer ? ` (you chose: ${answer})` : ''}.`)
+        return { ...ran, context: [...(ran.context ?? []), subtaskAnswerContext(answer, action, tool)] }
+      }
       const ref = taskRefOf(input) ?? shortIdFromResult(ran.text)
       let task = await read($, active)
 
@@ -718,8 +862,11 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const below = await next(e)
-    const view = await read($, chipNow)
-    if (!view || (await kareaSyncLoaded($))) return below
+    if (await kareaSyncLoaded($)) return below
+    const task = await read($, active)
+    const view =
+      (await read($, chipNow)) ??
+      chipView({ shortid: task?.shortid ?? '', pending: 0, remote: 0, lastSyncAt: 0, now: 0, title: task?.title ?? '' })
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="row" justifyContent="space-between">

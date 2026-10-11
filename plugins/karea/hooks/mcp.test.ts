@@ -64,7 +64,7 @@ test('diffs two snapshots into what a person changed', async () => {
   expect(diffSnapshots(after, after)).toEqual([])
 })
 
-test('works through the Karea MCP server with no API key', { options: { pollSeconds: 60 } }, async ($, on) => {
+test('falls back to comparing snapshots when the server does not know karea_task_changes', { options: { pollSeconds: 60 } }, async ($, on) => {
   const clock = mock.clock(on, { now: Date.parse('2026-10-07T10:00:00Z') })
   mock.env(on, { HOME: '/tmp' })
   let status = 'open'
@@ -79,7 +79,9 @@ test('works through the Karea MCP server with no API key', { options: { pollSeco
         ? viewText(status, notes)
         : args.action === 'karea_get_context'
           ? contextText('mcp', '2026-10-07 09:00')
-          : 'Task updated.'
+          : args.action === 'karea_task_changes'
+            ? 'Unknown action "karea_task_changes" for karea_read. karea_read actions: karea_view_task.'
+            : 'Task updated.'
     if (args.action === 'karea_edit_task' && typeof args.params.status === 'string') status = args.params.status
     return { value: { content: [{ type: 'text', text }], isError: false } } as never
   })
@@ -126,7 +128,7 @@ test('checks Karea every 5 minutes unless the user chose otherwise', async ($, o
   on('mcp.call', ($, e) => {
     const { server, args } = e as unknown as { server: string; args: { action: string } }
     if (server !== 'karea') throw new Error('not connected')
-    if (args.action === 'karea_view_task') views += 1
+    if (args.action === 'karea_view_task' || args.action === 'karea_task_changes') views += 1
     const text = args.action === 'karea_view_task' ? viewText('open', []) : args.action === 'karea_get_context' ? contextText('mcp', '2026-10-07 09:00') : 'ok'
     return { value: { content: [{ type: 'text', text }], isError: false } } as never
   })

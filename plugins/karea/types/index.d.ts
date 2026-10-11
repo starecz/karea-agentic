@@ -33,6 +33,8 @@ declare module 'claude-code' {
       turnWrote: boolean
       earlier: { prompt: string; answer: string } | null
       openDecisions: { text: string; age: number }[]
+      lastCheckAt: number
+      seenChanges: string[]
     }
   }
 }
