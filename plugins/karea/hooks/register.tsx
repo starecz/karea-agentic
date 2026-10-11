@@ -271,15 +271,18 @@ async function kareaMcpRaw(
   params: Record<string, unknown>,
 ): Promise<{ text: string; isError: boolean } | null> {
   const candidates = cfg.mcpServer ? [cfg.mcpServer] : mcpServerInUse ? [mcpServerInUse] : MCP_SERVERS
+  const failures: string[] = []
   for (const server of candidates) {
     try {
       const result = await $.mcp.call(server, tool, { action, params })
       mcpServerInUse = server
       return { text: mcpText(result), isError: result.isError === true }
-    } catch {
+    } catch (error) {
+      failures.push(`${server}: ${error instanceof Error ? error.message : String(error)}`)
       continue
     }
   }
+  if (tool !== 'karea_read') $.ui.log(`${action} failed: ${failures.join('; ').slice(0, 200)}`)
   return null
 }
 

@@ -1,13 +1,15 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { diffSnapshots, parseContextText, parseViewTask, snapshotOf } from './rules'
+import { contextAgesOf, diffSnapshots, parseContextText, parseViewTask, snapshotOf } from './rules'
 
 const ID = '11111111-2222-4333-8444-555555555555'
 
 function viewText(status: string, notes: string[]) {
   return [
     '**Claude Code mods for Karea clients: visual task sync status**',
-    `Status: ${status} (Developer review) · Priority: P3 · Category: Integrations`,
+    status === 'review'
+      ? 'Status: review (Developer review) · Priority: P3 · Category: Integrations'
+      : `Status: ${status.replace(/_/g, ' ')} · Priority: P3 · Category: Integrations`,
     'Description: Build Claude Code mods.',
     'Created: 07 Oct 2026, 12:04 by Alex',
     ...(notes.length > 0 ? ['Notes:', ...notes.map(note => `  ${note}`)] : []),
@@ -144,4 +146,14 @@ test('checks Karea every 5 minutes unless the user chose otherwise', async ($, o
   expect(views).toBe(afterPick)
   await clock.advance(61000)
   expect(views).toBe(afterPick + 1)
+})
+
+test('karea_get_context stamps are UTC, whatever the machine timezone', () => {
+  const [plan] = contextAgesOf(parseContextText(contextText('user', '2026-10-07 09:00')))
+  expect(plan?.updatedAt).toBe(Date.parse('2026-10-07T09:00:00Z'))
+})
+
+test('reads the status as Karea prints it, with spaces', () => {
+  expect(parseViewTask(viewText('in_progress', []))?.status).toBe('in_progress')
+  expect(parseViewTask(viewText('review', []))?.status).toBe('review')
 })

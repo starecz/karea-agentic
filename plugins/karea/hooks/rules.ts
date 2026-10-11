@@ -442,7 +442,7 @@ export function parseViewTask(text: string): ViewedTask | undefined {
     id,
     shortid: text.match(/^Short ID:\s*(\S+)\s*$/m)?.[1] ?? '',
     title: text.match(/^\*\*(.+)\*\*\s*$/m)?.[1] ?? '',
-    status: text.match(/^Status:\s*([a-z_]+)/m)?.[1] ?? '',
+    status: (text.match(/^Status:\s*([a-z][a-z _]*?)\s*(?:\(|·|$)/m)?.[1] ?? '').replace(/ /g, '_'),
     notes,
   }
 }
@@ -461,7 +461,7 @@ export function parseContextText(text: string): ContextLine[] {
 export function contextAgesOf(entries: readonly ContextLine[]): ContextAge[] {
   return entries.map(entry => ({
     title: entry.title,
-    updatedAt: Date.parse(entry.stamp.replace(' ', 'T')),
+    updatedAt: Date.parse(`${entry.stamp.replace(' ', 'T')}Z`),
     lastEditedMode: entry.mode,
   }))
 }
