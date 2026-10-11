@@ -40,6 +40,7 @@ import {
   recapText,
   receipt,
   rereadContext,
+  briefContext,
   shortIdFromResult,
   staleEntries,
   syncAllPrompt,
@@ -154,6 +155,8 @@ const earlier = atom({ plugin: 'karea', key: 'earlier' } as const, null)
 const openDecisions = atom({ plugin: 'karea', key: 'openDecisions' } as const, [])
 const lastCheckAt = atom({ plugin: 'karea', key: 'lastCheckAt' } as const, 0)
 const seenChanges = atom({ plugin: 'karea', key: 'seenChanges' } as const, [])
+// Picked from KAREA_TASK at start: the first prompt carries the brief (Karea Connect sends none when this mod is on).
+const briefPending = atom({ plugin: 'karea', key: 'briefPending' } as const, false)
 
 // The task picked in each session, kept in the plugin's store so a closed and resumed session gets it back.
 const SESSION_TASKS = 'sessionTasks'
@@ -597,6 +600,7 @@ async function restoreTask($: EngineInterface) {
   const ref = ((await $.env.get('KAREA_TASK')) ?? '').trim().toUpperCase()
   if (!isShortId(ref)) return
   await update($, active, () => ({ shortid: ref, id: '', title: '', status: '' }))
+  await update($, briefPending, () => true)
   $.clock.after(0, () => void autoPick($, ref))
 }
 
@@ -759,6 +763,10 @@ export const register: Register = (on, options) => {
 
     const task = await read($, active)
     if (!task) return next(e)
+    if (await read($, briefPending)) {
+      await update($, briefPending, () => false)
+      return next({ ...e, context: [...(e.context ?? []), briefContext(task.shortid)] })
+    }
 
     const awayMinutes = previous === 0 ? 0 : Math.round((now - previous) / 60000)
     const reason =

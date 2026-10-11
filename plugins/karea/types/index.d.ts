@@ -35,6 +35,7 @@ declare module 'claude-code' {
       openDecisions: { text: string; age: number }[]
       lastCheckAt: number
       seenChanges: string[]
+      briefPending: boolean
     }
   }
 }

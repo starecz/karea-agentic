@@ -366,6 +366,11 @@ export function rereadContext(shortid: string, reason: string): string {
   return `Active Karea task: ${shortid}. ${reason} Before acting on this message, re-read the task in Karea, as it may have changed: call karea_read with karea_view_task, then karea_get_context, karea_list_notes and karea_list_questions (task ${shortid}).`
 }
 
+/** A session Karea Connect started on a task: on the first prompt, Claude reads the task itself. */
+export function briefContext(shortid: string): string {
+  return `This session was started from Karea Connect on Karea task ${shortid}, its active task. Before answering, read the task with the Karea tools: karea_read with karea_view_task, then karea_get_context, karea_list_notes and karea_list_questions (task ${shortid}). Then do what the user asks; if they did not ask for anything specific, sum the task up in two or three lines and wait for their instructions.`
+}
+
 export function pickContext(shortid: string, hasApi: boolean): string {
   return hasApi
     ? `The user made Karea task ${shortid} the active task for this session. Read its context before working on it.`

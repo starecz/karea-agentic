@@ -168,6 +168,28 @@ test('picks the task Karea Connect started the session for, and keeps it for tha
 
 })
 
+test('a session Karea Connect started on a task: the first prompt asks Claude to read it, only once', async ($, on) => {
+  mock.clock(on, { now: START })
+  mock.env(on, { HOME: '/tmp', KAREA_TASK: 'KA747' })
+  storeMock(on, {})
+  on('mcp.call', ($, e) => {
+    const { args } = e as unknown as { args: { action: string } }
+    const text = args.action === 'karea_view_task' ? viewText('in_progress') : args.action === 'karea_get_context' ? '# Context: none' : 'ok'
+    return { value: { content: [{ type: 'text', text }], isError: false } } as never
+  })
+  on('session.id', () => ({ value: 'session-c' }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', ($, e) => e as never)
+  on('prompt.submit', ($, e) => e as never)
+  on('tool.call', () => ({ result: '', text: '' }) as never)
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  const first = (await $.prompt.submit({ text: 'hi', origin: { kind: 'composer' } } as never)) as unknown as { context?: string[] }
+  expect((first.context ?? []).join(' ')).toContain('started from Karea Connect on Karea task KA747')
+  const second = (await $.prompt.submit({ text: 'and now?', origin: { kind: 'composer' } } as never)) as unknown as { context?: string[] }
+  expect((second.context ?? []).join(' ')).not.toContain('started from Karea Connect')
+})
+
 test('a resumed session gets its own task back, even when Karea Connect names another', async ($, on) => {
   mock.clock(on, { now: START })
   mock.env(on, { HOME: '/tmp', KAREA_TASK: 'KA747' })
