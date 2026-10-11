@@ -1,0 +1,11 @@
+{
+  "name": "karea-agentic",
+  "owner": { "name": "starecz" },
+  "plugins": [
+    {
+      "name": "karea",
+      "source": "./plugins/karea",
+      "description": "Shows whether your active Karea task is in sync with what this Claude Code session did"
+    }
+  ]
+}

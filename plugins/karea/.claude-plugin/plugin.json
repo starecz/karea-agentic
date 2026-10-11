@@ -1,0 +1,77 @@
+{
+  "name": "karea",
+  "version": "0.3.0",
+  "description": "Shows whether your active Karea task is in sync with what this session did: hint-line chip, behind band, changed-in-Karea alerts, task pane, sync receipts and a /ksync command",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "apiKey": {
+      "type": "string",
+      "title": "Karea API key",
+      "description": "Optional. Leave empty to use your connected Karea MCP server (karea or claude.ai Karea). A key gives exact change history (who changed what) instead of comparing snapshots.",
+      "sensitive": true,
+      "default": ""
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Karea URL",
+      "description": "Where your Karea lives.",
+      "default": "https://karea.app"
+    },
+    "mcpServer": {
+      "type": "string",
+      "title": "Karea MCP server name",
+      "description": "Leave empty to try 'karea' then 'claude.ai Karea'. Set it if your Karea server is named differently in /mcp.",
+      "default": ""
+    },
+    "preset": {
+      "type": "string",
+      "title": "Commands that count as progress",
+      "description": "git: successful commits and pushes only. general: also PRs, deploys, migrations. salesforce: also sf deploys and data loads. both: all of them. Each is counted only when its output shows it succeeded.",
+      "options": [
+        "git",
+        "general",
+        "salesforce",
+        "both"
+      ],
+      "default": "git"
+    },
+    "extraPatterns": {
+      "type": "string",
+      "title": "Extra progress patterns",
+      "description": "Your own commands, as label=regex pairs separated by ';'. Example: released=\\bmake release\\b",
+      "default": ""
+    },
+    "detectDecisions": {
+      "type": "boolean",
+      "title": "Spot decisions and open questions",
+      "description": "Off by default. When on, after each reply a small Haiku call (billed to your account) reads the exchange to spot decisions about the task or open questions, and flags them as not synced.",
+      "default": false
+    },
+    "pollSeconds": {
+      "type": "number",
+      "title": "Check Karea every (seconds)",
+      "description": "How often to look for changes made in Karea while you are active. 300 (5 minutes) is recommended; lower values mean more Karea calls. Minimum 60.",
+      "default": 300,
+      "min": 60,
+      "max": 1800
+    },
+    "receipts": {
+      "type": "boolean",
+      "title": "Sync receipts",
+      "description": "Print a one-line receipt in the transcript after each Karea write.",
+      "default": true
+    },
+    "statusFile": {
+      "type": "boolean",
+      "title": "Write the chip to a file",
+      "description": "Also write the status chip to ~/.claude/karea/status-<session id> so your own status line script can show it.",
+      "default": false
+    },
+    "questionMeeting": {
+      "type": "string",
+      "title": "Meeting for new open questions",
+      "description": "When Claude creates an open question: leave empty to be asked each time which upcoming meeting to link it to; 'none' to never link one; or part of a meeting's title (e.g. your daily's name) to always link the next occurrence of that meeting that has not started yet, preferring one in the question's project.",
+      "default": ""
+    }
+  }
+}
