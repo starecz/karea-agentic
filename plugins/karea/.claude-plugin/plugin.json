@@ -73,5 +73,6 @@
       "description": "When Claude creates an open question: leave empty to be asked each time which upcoming meeting to link it to; 'none' to never link one; or part of a meeting's title (e.g. your daily's name) to always link the next occurrence of that meeting that has not started yet, preferring one in the question's project.",
       "default": ""
     }
-  }
+  },
+  "license": "MIT"
 }
