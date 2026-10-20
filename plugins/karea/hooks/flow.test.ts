@@ -171,3 +171,32 @@ test('the band defers to the personal karea-sync mod when both are loaded', asyn
   expect(await band.find({ key: 'sync' })).toBe(undefined)
   await band.unmount()
 })
+
+test('a sync counts only once its turn ends, and it re-checks the whole context', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-07T10:00:00Z') })
+  mock.env(on, { HOME: '/tmp' })
+  on('tool.call', ($, e) => (e.tool === 'Bash' ? shell(e.command) : { result: '', text: '' }) as never)
+  on('turn.complete', ($, e) => e as never)
+  const sent: string[] = []
+  on('prompt.submit', ($, e) => { sent.push((e as { text: string }).text); return e as never })
+
+  await $.command.run({ command: 'ksync', args: 'pick KA9' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m x && git push' })
+  const pane = await $.ui.mount({ plugin: 'karea', surface: 'terminal', component: 'Pane', requestId: 'karea-task', props: { title: 'Karea' } as never })
+  await pane.press({ key: 'pane-sync' })
+  await pane.unmount()
+  const prompt = sent.find(t => t.startsWith('Update Karea task KA9')) ?? ''
+  expect(prompt).toContain('Re-read every Context entry')
+  expect(prompt).toContain('Add a note only if something big happened')
+  expect(prompt).not.toContain('and add a note')
+
+  // The first write of the sync, on one entry only: not synced yet.
+  await $.tool.call({ tool: 'mcp__karea__karea_tasks_write', action: 'karea_set_context', params: { task: 'KA9', title: 'Plan', content: 'Pushed' } } as never)
+  const mid = await $.command.run({ command: 'ksync', args: 'status' } as never)
+  expect(mid.text).toContain('Not synced yet')
+
+  // The sync turn ends: now it is.
+  await $.turn.complete({ reason: 'answer', answer: 'Synced KA9.', text: '', turnId: 't1' } as never)
+  const after = await $.command.run({ command: 'ksync', args: 'status' } as never)
+  expect(after.text).toContain('Nothing waiting to be synced.')
+})

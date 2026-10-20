@@ -18,6 +18,8 @@ import {
   recapText,
   shortIdFromResult,
   taskRefOf,
+  taskRefsOf,
+  writeTouchesTask,
 } from './rules'
 
 const COMMITTED = '[main 3c3b8de] Fix login\n 1 file changed'
@@ -82,6 +84,18 @@ test('finds the task a Karea call is about', async () => {
   expect(taskRefOf({ params: { parent: 'KA11', title: 'sub' } })).toBe('KA11')
   expect(taskRefOf({ params: { name: 'new' } })).toBe(undefined)
   expect(shortIdFromResult('Task created\nShort ID: KA747\nLink: x')).toBe('KA747')
+})
+
+test('a Karea write counts for the active task only when it names it (KA983)', async () => {
+  const active = { shortid: 'JN31', id: '11111111-2222-4333-8444-555555555555' }
+  expect(taskRefsOf({ action: 'karea_edit_tasks', params: { tasks: ['KA1', 'jn31'], status: 'review' } })).toEqual(['KA1', 'jn31'])
+  expect(taskRefsOf({ params: { name: 'new', projectId: 'Karea' } })).toEqual([])
+  expect(writeTouchesTask(['JN31'], active)).toBe(true)
+  expect(writeTouchesTask(['jn31'], active)).toBe(true)
+  expect(writeTouchesTask([active.id], active)).toBe(true)
+  expect(writeTouchesTask(['KA982'], active)).toBe(false)
+  expect(writeTouchesTask([], active)).toBe(false)
+  expect(writeTouchesTask(['JN31'], null)).toBe(false)
 })
 
 test('pending list dedupes and stays short', async () => {

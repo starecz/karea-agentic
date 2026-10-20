@@ -193,6 +193,20 @@ export function taskRefOf(input: Record<string, unknown>): string | undefined {
   return undefined
 }
 
+// KA983: every task a Karea write names (task, parent, taskId, tasks[]).
+export function taskRefsOf(input: Record<string, unknown>): string[] {
+  const params = kareaParams(input)
+  const refs = ['task', 'parent', 'taskId'].map(key => params[key])
+  if (Array.isArray(params.tasks)) refs.push(...params.tasks)
+  return refs.filter((ref): ref is string => typeof ref === 'string' && ref.trim() !== '').map(ref => ref.trim())
+}
+
+// KA983: a write counts for the active task only when it names that task; a write with no task ref does not.
+export function writeTouchesTask(refs: readonly string[], task: { shortid: string; id: string } | null): boolean {
+  if (!task) return false
+  return refs.some(ref => ref === task.id || ref.toUpperCase() === task.shortid.toUpperCase())
+}
+
 export function shortIdFromResult(text: string | undefined): string | undefined {
   return text?.match(/Short ID:\s*([A-Za-z]{1,8}\d+)/)?.[1]
 }
@@ -352,14 +366,24 @@ export function syncRules(pending: readonly string[]): string {
   return rules.join(' ')
 }
 
-export function syncPrompt(shortid: string, pending: readonly string[]): string {
+/** KA836: a note only for what matters; KA813: the whole context made true again, not just the delta. */
+const REFRESH_RULES =
+  "Re-read every Context entry and rewrite any statement this session made false (for example \"not committed\" after a push), not only the parts about the items listed. Save into the context anything that exists only in this session's scratch or temp folder and that later work needs. Add a note only if something big happened for the task's outcome; a routine sync needs no note."
+
+export function syncPrompt(shortid: string, pending: readonly string[], stale: readonly string[] = []): string {
   const what = pending.length > 0 ? ` (${pending.join('; ')})` : ''
-  return `Update Karea task ${shortid} with this session's progress since its last update${what}: refresh its context and add a note. ${syncRules(pending)} Then reply in one line.`
+  const old = stale.length > 0 ? ` Entries not rewritten this session, check each: ${stale.map(t => `"${t}"`).join(', ')}.` : ''
+  return `Update Karea task ${shortid} with this session's progress since its last update${what}: refresh its context. ${REFRESH_RULES}${old} ${syncRules(pending)} Then reply in one line.`
 }
 
 export function syncAllPrompt(tasks: readonly Touched[]): string {
   const list = tasks.map(task => `${task.shortid} (${task.pending.join('; ')})`).join('; ')
-  return `Update each of these Karea tasks with this session's progress since its last update: ${list}. For each, refresh its context and add a note. ${syncRules(tasks.flatMap(task => task.pending))} Then reply with one line per task.`
+  return `Update each of these Karea tasks with this session's progress since its last update: ${list}. For each, refresh its context. ${REFRESH_RULES} ${syncRules(tasks.flatMap(task => task.pending))} Then reply with one line per task.`
+}
+
+/** KA813: an entry is stale until it is rewritten after the session's first event, whatever was synced since. */
+export function staleSince(entries: readonly ContextAge[], firstEventAt: number): Set<string> {
+  return firstEventAt === 0 ? new Set() : new Set(entries.filter(entry => entry.updatedAt < firstEventAt).map(entry => entry.title))
 }
 
 export function rereadContext(shortid: string, reason: string): string {
@@ -532,7 +556,7 @@ export function changeKey(row: TaskChange): string {
   return `${row.stamp} ${row.text} ${row.by} ${row.mode}`
 }
 
-const QUIET_LABELS = new Set(['closed by', 'custom status', 'mcp hint clicked at', 'recap generated', 'email overdue'])
+const QUIET_LABELS = new Set(['closed by', 'custom status', 'mcp hint clicked at', 'recap generated', 'email overdue', 'terminal started', 'terminal ended'])
 
 // Only what a person changed, in the browser (user) or through Karea AI (ai). The session's own writes come
 // back as mcp and are left out, like Jira and system rows.
@@ -631,27 +655,29 @@ export function trackOpenDecisions(open: readonly OpenDecision[], reply: string)
 
 export type Meeting = { id: string; startAt: number; title: string; project: string }
 
-// karea_list_meetings text: "- 2026-10-08 13:00 - Title [Project] (id: <uuid>)"; times are the user's local time.
+// karea_list_meetings text: "- 2026-10-08 13:00 - Title [Project] (id: <uuid>)", times in UTC, maybe
+// followed by " - 2 open question(s)" (KA990).
 export function parseMeetings(text: string): Meeting[] {
   const meetings: Meeting[] = []
   for (const line of text.split('\n')) {
-    const match = line.match(/^- (\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}) - (.+?) \(id: ([0-9a-f-]{36})\)\s*$/)
+    const match = line.match(/^- (\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}) - (.+?) \(id: ([0-9a-f-]{36})\)(?: - \d+ open questions?(?:\(s\))?)?\s*$/)
     if (!match) continue
     const [, y, mo, d, h, mi, rest = '', id = ''] = match
     const project = rest.match(/\[([^\]]+)\]\s*$/)?.[1] ?? ''
     const title = rest.replace(/\s*\[[^\]]+\]\s*$/, '').trim()
-    meetings.push({ id, startAt: new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi)).getTime(), title, project })
+    meetings.push({ id, startAt: Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi)), title, project })
   }
   return meetings.sort((a, b) => a.startAt - b.startAt)
 }
 
-// The next occurrence that has not started yet of the meeting the user named; same project first.
-export function pickMeeting(meetings: readonly Meeting[], name: string, project: string, now: number): Meeting | undefined {
+// The earliest occurrence of the meeting the user named among meetings that have not ended (KA990), and
+// only in the question's project when it has one (KA961: never a meeting of another project).
+export function pickMeeting(meetings: readonly Meeting[], name: string, project: string): Meeting | undefined {
   const wanted = name.trim().toLowerCase()
   if (wanted === '') return undefined
-  const upcoming = meetings.filter(m => m.startAt > now && m.title.toLowerCase().includes(wanted))
-  const sameProject = upcoming.filter(m => project !== '' && m.project.toLowerCase() === project.trim().toLowerCase())
-  return sameProject[0] ?? upcoming[0]
+  const named = meetings.filter(m => m.title.toLowerCase().includes(wanted))
+  if (project.trim() === '') return named[0]
+  return named.find(m => m.project.toLowerCase() === project.trim().toLowerCase())
 }
 
 export function meetingLabel(meeting: Meeting): string {
@@ -669,6 +695,15 @@ export function questionIds(text: string | undefined): { id: string; shortid: st
 
 export const NO_MEETING = 'No meeting, task only'
 export const ASK_MEETING = "I'm about to create this open question. Link it to a meeting, or keep it attached only to the task?"
+
+// KA991: a typed answer to the meeting question, passed on to Claude instead of being dropped.
+export function freeMeetingAnswerInstruction(shortid: string, questionId: string, answer: string): string {
+  return `The user answered the question about which meeting to link open question ${shortid} (id ${questionId}) to with: "${clip(answer, 300)}". Act on it: find the meeting with karea_list_meetings and link it with karea_link_question_to_meeting, or leave it unlinked if that is what they said. Then confirm in one short line.`
+}
+
+export function linkedNotice(shortid: string, label: string): string {
+  return `Open question ${shortid} was linked to the meeting ${label}. Mention it in your reply.`
+}
 
 export function linkInstruction(shortid: string, questionId: string, meetingId: string, label: string): string {
   return `Open question ${shortid} must be linked to the meeting ${label}: call karea_link_question_to_meeting with meetingId ${meetingId} and questionId ${questionId} now, then mention it in one short line.`

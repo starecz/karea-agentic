@@ -19,23 +19,24 @@ test('reads Karea meeting lines', async () => {
   expect(meetings).toHaveLength(6)
   expect(meetings[0]).toEqual({
     id: 'aaaaaaaa-0000-4000-8000-000000000001',
-    startAt: at(8, 12),
+    startAt: Date.UTC(2026, 9, 8, 12, 0),
     title: 'ACME : Portal Refinement Call',
     project: 'Acme',
   })
   expect(meetings.find(m => m.title.startsWith('Dentist'))?.project).toBe('')
+  expect(parseMeetings('- 2026-10-20 11:00 - JJJQ : Daily [JnJ] (id: aaaaaaaa-0000-4000-8000-000000000009) - 1 open question(s)')).toHaveLength(1)
 })
 
-test('links to the next occurrence of the named meeting that has not started yet', async () => {
+test('links to the earliest occurrence of the named meeting not yet ended, in the question project only', async () => {
   const meetings = parseMeetings(LIST)
   const daily = 'Daily Scrum'
-  expect(pickMeeting(meetings, daily, 'Acme', at(8, 9))?.id).toBe('aaaaaaaa-0000-4000-8000-000000000002')
-  expect(pickMeeting(meetings, daily, 'Acme', at(8, 13, 5))?.id).toBe('aaaaaaaa-0000-4000-8000-000000000004')
-  expect(pickMeeting(meetings, daily, 'Acme', at(9, 14))?.id).toBe('aaaaaaaa-0000-4000-8000-000000000005')
-  expect(pickMeeting(meetings, 'daily', 'Internal', at(8, 14))?.id).toBe('aaaaaaaa-0000-4000-8000-000000000006')
-  expect(pickMeeting(meetings, 'daily', 'Acme', at(8, 14))?.id).toBe('aaaaaaaa-0000-4000-8000-000000000004')
-  expect(pickMeeting(meetings, '', 'Acme', at(8, 9))).toBe(undefined)
-  expect(pickMeeting(meetings, 'standup', 'Acme', at(8, 9))).toBe(undefined)
+  expect(pickMeeting(meetings, daily, 'Acme')?.id).toBe('aaaaaaaa-0000-4000-8000-000000000002')
+  expect(pickMeeting(meetings.filter(m => m.id !== 'aaaaaaaa-0000-4000-8000-000000000002'), daily, 'Acme')?.id).toBe('aaaaaaaa-0000-4000-8000-000000000004')
+  expect(pickMeeting(meetings, 'daily', 'Internal')?.id).toBe('aaaaaaaa-0000-4000-8000-000000000006')
+  expect(pickMeeting(meetings, daily, 'Harrier')).toBe(undefined)
+  expect(pickMeeting(meetings, daily, '')?.id).toBe('aaaaaaaa-0000-4000-8000-000000000002')
+  expect(pickMeeting(meetings, '', 'Acme')).toBe(undefined)
+  expect(pickMeeting(meetings, 'standup', 'Acme')).toBe(undefined)
 })
 
 function server(links: { meetingId: string; questionId: string }[]) {
@@ -57,13 +58,30 @@ const CREATE = {
   params: { question: 'Will UAT be refreshed?', projectId: 'Acme', taskIds: ['AC22'] },
 }
 
-test('with a meeting set, a new question is linked to its next occurrence', { options: { questionMeeting: 'Daily Scrum' } }, async ($, on) => {
+test('with a meeting set, a new question is linked to its earliest occurrence not ended, and Claude hears of it', { options: { questionMeeting: 'Daily Scrum' } }, async ($, on) => {
   mock.clock(on, { now: at(8, 13, 5) })
   const links: { meetingId: string; questionId: string }[] = []
   on('mcp.call', server(links))
   on('tool.call', () => ({ result: '', text: CREATED }) as never)
-  await $.tool.call(CREATE as never)
-  expect(links).toEqual([{ meetingId: 'aaaaaaaa-0000-4000-8000-000000000004', questionId: '0f0e0d0c-1111-2222-3333-444455556666' }])
+  const ran = (await $.tool.call(CREATE as never)) as { context?: string[] }
+  expect(links).toEqual([{ meetingId: 'aaaaaaaa-0000-4000-8000-000000000002', questionId: '0f0e0d0c-1111-2222-3333-444455556666' }])
+  expect(ran.context?.join(' ')).toContain('was linked to the meeting')
+})
+
+test('a typed answer to the meeting question is passed on to Claude, nothing linked (KA991)', async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  const links: { meetingId: string; questionId: string }[] = []
+  on('mcp.call', server(links))
+  on('tool.call', ($, e) => {
+    if ((e as unknown as { tool: string }).tool === 'AskUserQuestion') {
+      const input = e as unknown as { questions: { question: string }[] }
+      return { result: { answers: { [input.questions[0]?.question ?? '']: "link it to today's daily" } }, text: '' } as never
+    }
+    return { result: '', text: CREATED } as never
+  })
+  const ran = (await $.tool.call(CREATE as never)) as { context?: string[] }
+  expect(links).toEqual([])
+  expect(ran.context?.join(' ')).toContain(`with: "link it to today's daily"`)
 })
 
 test("with 'none', nothing is linked and nobody is asked", { options: { questionMeeting: 'none' } }, async ($, on) => {
@@ -105,5 +123,5 @@ test('if the mod cannot link the question itself, Claude is told exactly how to 
   })
   on('tool.call', () => ({ result: '', text: CREATED }) as never)
   const ran = (await $.tool.call(CREATE as never)) as { context?: string[] }
-  expect(ran.context?.join(' ')).toContain('call karea_link_question_to_meeting with meetingId aaaaaaaa-0000-4000-8000-000000000004 and questionId 0f0e0d0c-1111-2222-3333-444455556666')
+  expect(ran.context?.join(' ')).toContain('call karea_link_question_to_meeting with meetingId aaaaaaaa-0000-4000-8000-000000000002 and questionId 0f0e0d0c-1111-2222-3333-444455556666')
 })

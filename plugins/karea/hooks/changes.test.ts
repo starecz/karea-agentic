@@ -46,6 +46,15 @@ test('reads karea_task_changes rows and keeps only what a person changed', async
   expect(parseTaskChanges(changesText([], 5))).toEqual([])
 })
 
+test('a session starting or ending on the task is not a change (KA983)', async () => {
+  const rows = parseTaskChanges(changesText([
+    '- 2026-10-07T10:01:50Z terminal started: Claude Code on mac · by Alex (user)',
+    '- 2026-10-07T10:01:45Z terminal ended: Claude Code on mac · by Alex (user)',
+  ], 3))
+  expect(rows).toHaveLength(2)
+  expect(personChanges(rows, START, [])).toEqual([])
+})
+
 test('asks for the minutes since the last check, and nothing past 60', async () => {
   expect(changesWindow(0, START)).toBe(undefined)
   expect(changesWindow(START, START + 61000)).toBe(3)

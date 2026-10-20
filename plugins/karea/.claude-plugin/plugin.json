@@ -1,6 +1,6 @@
 {
   "name": "karea",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Shows whether your active Karea task is in sync with what this session did: hint-line chip, behind band, changed-in-Karea alerts, task pane, sync receipts, a /ksync command and the Karea skill",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -70,7 +70,7 @@
     "questionMeeting": {
       "type": "string",
       "title": "Meeting for new open questions",
-      "description": "When Claude creates an open question: leave empty to be asked each time which upcoming meeting to link it to; 'none' to never link one; or part of a meeting's title (e.g. your daily's name) to always link the next occurrence of that meeting that has not started yet, preferring one in the question's project.",
+      "description": "When Claude creates an open question: leave empty to be asked each time which upcoming meeting to link it to; 'none' to never link one; or part of a meeting's title (e.g. your daily's name) to always link the earliest occurrence of that meeting that has not ended, in the question's project only.",
       "default": ""
     }
   },

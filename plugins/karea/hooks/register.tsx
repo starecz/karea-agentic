@@ -20,6 +20,8 @@ import {
   pickMeeting,
   questionIds,
   linkInstruction,
+  freeMeetingAnswerInstruction,
+  linkedNotice,
   kareaParams,
   contextAgesOf,
   diffSnapshots,
@@ -42,14 +44,15 @@ import {
   rereadContext,
   briefContext,
   shortIdFromResult,
-  staleEntries,
+  staleSince,
   syncAllPrompt,
   syncPrompt,
   ANALYZE_SYSTEM,
   analyzePrompt,
   parseFindings,
   trackOpenDecisions,
-  taskRefOf,
+  taskRefsOf,
+  writeTouchesTask,
   upsertTouched,
   changeKey,
   changesWindow,
@@ -151,6 +154,8 @@ const snapshot = atom({ plugin: 'karea', key: 'snapshot' } as const, null)
 const chipNow = atom({ plugin: 'karea', key: 'chipNow' } as const, null)
 const lastPrompt = atom({ plugin: 'karea', key: 'lastPrompt' } as const, '')
 const turnWrote = atom({ plugin: 'karea', key: 'turnWrote' } as const, false)
+// KA813: a sync turn is under way; its Karea writes count only once the turn ends.
+const syncing = atom({ plugin: 'karea', key: 'syncing' } as const, false)
 const earlier = atom({ plugin: 'karea', key: 'earlier' } as const, null)
 const openDecisions = atom({ plugin: 'karea', key: 'openDecisions' } as const, [])
 const lastCheckAt = atom({ plugin: 'karea', key: 'lastCheckAt' } as const, 0)
@@ -249,6 +254,27 @@ async function rememberTouched($: EngineInterface) {
   if (!task) return
   const entry: Touched = { shortid: task.shortid, title: task.title, pending: await read($, pending) }
   await update($, touched, list => upsertTouched(list, entry))
+}
+
+/** The active task is up to date with this session: nothing pending, every local event synced. */
+async function markTaskSynced($: EngineInterface) {
+  const now = await $.clock.now()
+  await update($, pending, () => [])
+  await update($, events, list => markSynced(list))
+  await update($, lastSyncAt, () => now)
+  await update($, watermark, () => now)
+  await update($, clearArmed, () => false)
+  await update($, snapshot, () => null)
+  await rememberTouched($)
+  await refreshChip($)
+}
+
+/** KA813: ask Claude to sync the active task, naming the context entries not rewritten this session. */
+async function startSync($: EngineInterface, shortid: string) {
+  const first = (await read($, events))[0]?.at ?? 0
+  const stale = [...staleSince(await read($, contextAges), first)]
+  await update($, syncing, () => true)
+  await $.prompt.submit({ text: syncPrompt(shortid, await read($, pending), stale), asUser: true }).catch(() => update($, syncing, () => false))
 }
 
 async function loadContextAges($: EngineInterface, ref: string) {
@@ -508,11 +534,11 @@ async function kareaSyncLoaded($: EngineInterface): Promise<boolean> {
 
 async function upcomingMeetings($: EngineInterface): Promise<Meeting[]> {
   const now = await $.clock.now()
-  const from = new Date(now - 60000).toISOString()
   const to = new Date(now + 21 * 86400000).toISOString()
   for (const server of MEETING_SERVERS) {
     try {
-      const result = await $.mcp.call(server, 'karea_read', { action: 'karea_list_meetings', params: { from, to } })
+      // KA990: every meeting that has not ended, so one under way today is offered too.
+      const result = await $.mcp.call(server, 'karea_read', { action: 'karea_list_meetings', params: { scope: 'upcoming', to } })
       if (result.isError) return []
       return parseMeetings(result.content.map(block => block.text ?? '').join('\n'))
     } catch {
@@ -548,33 +574,35 @@ async function meetingForQuestion($: EngineInterface, tool: string, input: Recor
 
 async function linkCreatedQuestion(
   $: EngineInterface,
-  meeting: Meeting | undefined,
+  meeting: Meeting | { answer: string } | undefined,
   resultText: string | undefined,
 ): Promise<string | undefined> {
   if (!meeting) return undefined
   const question = questionIds(resultText)
   if (!question) return undefined
+  if ('answer' in meeting) return freeMeetingAnswerInstruction(question.shortid, question.id, meeting.answer)
   const failure = await linkQuestionToMeeting($, meeting.id, question.id)
   if (failure === '') {
     $.ui.log(`✓ ${question.shortid} linked to ${meetingLabel(meeting)}`)
-    return undefined
+    return linkedNotice(question.shortid, meetingLabel(meeting))
   }
   $.ui.log(`${question.shortid}: could not link it to ${meetingLabel(meeting)} (${failure}); asking Claude to link it`)
   return linkInstruction(question.shortid, question.id, meeting.id, meetingLabel(meeting))
 }
 
-async function chooseMeeting($: EngineInterface, setting: string, project: string): Promise<Meeting | undefined> {
+async function chooseMeeting($: EngineInterface, setting: string, project: string): Promise<Meeting | { answer: string } | undefined> {
   if (setting.trim().toLowerCase() === 'none') return undefined
   const meetings = await upcomingMeetings($)
-  const now = await $.clock.now()
-  if (setting.trim() !== '') return pickMeeting(meetings, setting, project, now)
+  if (setting.trim() !== '') return pickMeeting(meetings, setting, project)
   const seen = new Set<string>()
-  const next = meetings.filter(m => m.startAt > now && !seen.has(m.title) && (seen.add(m.title), true)).slice(0, 3)
+  const next = meetings.filter(m => !seen.has(m.title) && (seen.add(m.title), true)).slice(0, 3)
   if (next.length === 0) return undefined
   const labels = next.map(meetingLabel)
   try {
     const answer = await $.ui.ask(ASK_MEETING, { options: [...labels, NO_MEETING], header: 'Meeting' })
-    return next[labels.indexOf(answer)]
+    const picked = next[labels.indexOf(answer)]
+    if (picked) return picked
+    return answer && answer !== NO_MEETING && answer.trim() ? { answer: answer.trim() } : undefined
   } catch {
     return undefined
   }
@@ -680,11 +708,12 @@ export const register: Register = (on, options) => {
         await rememberTouched($)
         const behind = (await read($, touched)).filter(item => item.pending.length > 0)
         if (behind.length === 0) return { text: 'Every Karea task touched in this session is synced.' }
+        await update($, syncing, () => true)
         void $.prompt.submit({ text: syncAllPrompt(behind), asUser: true })
         return { text: `Syncing ${behind.map(item => item.shortid).join(', ')}.` }
       }
       if (!task) return { text: 'No active Karea task. Run /ksync pick KA123 first.' }
-      void $.prompt.submit({ text: syncPrompt(task.shortid, await read($, pending)), asUser: true })
+      await startSync($, task.shortid)
       return { text: `Syncing ${task.shortid}.` }
     }
 
@@ -789,6 +818,11 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
+    // KA813: the sync turn is over: only now is the task synced (if Claude wrote to it at all).
+    if (e.agentId === undefined && (await read($, syncing))) {
+      await update($, syncing, () => false)
+      if ((await read($, turnWrote)) && (await read($, active))) await markTaskSynced($)
+    }
     if (!cfg.detectDecisions || e.agentId !== undefined || e.reason !== 'answer') return done
     if ((await read($, turnWrote)) || !(await read($, active))) return done
     const prompt = await read($, lastPrompt)
@@ -823,7 +857,9 @@ export const register: Register = (on, options) => {
         $.ui.log(`Karea kept "${refusal.title}" open: it has ${refusal.count} open subtask${refusal.count === 1 ? '' : 's'}${answer ? ` (you chose: ${answer})` : ''}.`)
         return { ...ran, context: [...(ran.context ?? []), subtaskAnswerContext(answer, action, tool)] }
       }
-      const ref = taskRefOf(input) ?? shortIdFromResult(ran.text)
+      const named = taskRefsOf(input)
+      const refs = named.length ? named : [shortIdFromResult(ran.text)].filter((id): id is string => id !== undefined)
+      const ref = refs[0]
       let task = await read($, active)
 
       if (!task && ref && isShortId(ref) && /link_session|doing|edit_task|set_context|add_note/.test(action)) {
@@ -832,17 +868,11 @@ export const register: Register = (on, options) => {
       }
 
       await update($, turnWrote, () => true)
-      const isActive = task !== null && (ref === undefined || ref === task.shortid || ref === task.id)
-      if (task && isActive) {
-        const now = await $.clock.now()
-        await update($, pending, () => [])
-        await update($, events, list => markSynced(list))
-        await update($, lastSyncAt, () => now)
-        await update($, watermark, () => now)
-        await update($, clearArmed, () => false)
-        await update($, snapshot, () => null)
-        await rememberTouched($)
-        await refreshChip($)
+      const isActive = writeTouchesTask(refs, task)
+      if (task && isActive && (await read($, syncing))) {
+        // KA813: the first write of a sync is not the sync: wait for the turn to end.
+      } else if (task && isActive) {
+        await markTaskSynced($)
       } else if (ref) {
         await update($, touched, list => list.map(item => (item.shortid === ref ? { ...item, pending: [] } : item)))
       }
@@ -900,7 +930,7 @@ export const register: Register = (on, options) => {
     if (list.length === 0 && changes.length === 0) return below
 
     const { Box, Text, Button } = $.ui.resolve(e)
-    const syncNow = () => void $.prompt.submit({ text: syncPrompt(task.shortid, list), asUser: true })
+    const syncNow = () => void startSync($, task.shortid)
     return (
       <Box flexDirection="column">
         {changes.length > 0 && (
@@ -951,8 +981,8 @@ export const register: Register = (on, options) => {
     const ages = await read($, contextAges)
     const timeline = await read($, events)
     const list = await read($, pending)
-    const lastLocal = timeline.filter(event => !event.isSynced).at(-1)?.at ?? 0
-    const stale = staleEntries(ages, lastLocal)
+    // KA813: stale until rewritten after the session's first event, synced or not.
+    const stale = staleSince(ages, timeline[0]?.at ?? 0)
     const room = Math.max(3, (e.viewport?.rows ?? 24) - 12 - ages.length)
 
     return (
@@ -994,7 +1024,7 @@ export const register: Register = (on, options) => {
             key="pane-sync"
             label={list.length > 0 ? `Sync now (${list.length})` : 'Sync now'}
             variant="primary"
-            onPress={() => void $.prompt.submit({ text: syncPrompt(task.shortid, list), asUser: true })}
+            onPress={() => void startSync($, task.shortid)}
           />
           <Button
             key="pane-review"
