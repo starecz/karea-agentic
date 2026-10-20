@@ -51,6 +51,7 @@ import {
   analyzePrompt,
   parseFindings,
   trackOpenDecisions,
+  readsTask,
   taskRefsOf,
   writeTouchesTask,
   upsertTouched,
@@ -379,6 +380,14 @@ async function flagRemote($: EngineInterface, shortid: string, changes: string[]
   await update($, remote, () => ({ at: now, lines }))
   await update($, watermark, () => now)
   $.ui.toast(`${shortid} changed in Karea: ${changes[0]}${changes.length > 1 ? ` (+${changes.length - 1})` : ''}`)
+  await refreshChip($)
+}
+
+// KA995: the session has the task's latest state, so the band and the chip stop asking.
+async function clearRemote($: EngineInterface) {
+  const now = await $.clock.now()
+  await update($, remote, () => null)
+  await update($, watermark, () => now)
   await refreshChip($)
 }
 
@@ -881,6 +890,8 @@ export const register: Register = (on, options) => {
       return ran
     }
 
+    if (readsTask(tool, input, await read($, active)) && (await read($, remote))) await clearRemote($)
+
     if (e.tool === 'Bash') {
       const out = (ran.result ?? {}) as {
         stdout?: string
@@ -937,15 +948,18 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column">
             <Box flexDirection="row" flexWrap="wrap">
               <Text color="error">◆ {task.shortid} changed in Karea </Text>
+              <Text dimColor>Claude reads it with your next message </Text>
               <Button
                 key="reread"
                 label="Re-read now"
                 variant="primary"
                 onPress={() =>
-                  void $.prompt.submit({
-                    text: `Re-read Karea task ${task.shortid}, then tell me in one line what changed.`,
-                    asUser: true,
-                  })
+                  void clearRemote($).then(() =>
+                    $.prompt.submit({
+                      text: `Re-read Karea task ${task.shortid}, then tell me in one line what changed.`,
+                      asUser: true,
+                    }),
+                  )
                 }
               />
               <Button key="later" label="Later" onPress={() => update($, remote, () => null)} />

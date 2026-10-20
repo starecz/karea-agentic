@@ -1,6 +1,6 @@
 {
   "name": "karea",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Shows whether your active Karea task is in sync with what this session did: hint-line chip, behind band, changed-in-Karea alerts, task pane, sync receipts, a /ksync command and the Karea skill",
   "types": "./types/index.d.ts",
   "userConfig": {

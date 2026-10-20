@@ -207,6 +207,15 @@ export function writeTouchesTask(refs: readonly string[], task: { shortid: strin
   return refs.some(ref => ref === task.id || ref.toUpperCase() === task.shortid.toUpperCase())
 }
 
+const READ_TASK_ACTION = /^karea_(view_task|view_tasks|get_context|list_notes|task_changes)$/
+
+// KA995: Claude reading the active task pulls its changes in, so the "changed in Karea" band can go.
+export function readsTask(tool: string, input: Record<string, unknown>, task: { shortid: string; id: string } | null): boolean {
+  if (isKareaWrite(tool, input)) return false
+  const action = kareaAction(tool, input)
+  return action !== undefined && READ_TASK_ACTION.test(action) && writeTouchesTask(taskRefsOf(input), task)
+}
+
 export function shortIdFromResult(text: string | undefined): string | undefined {
   return text?.match(/Short ID:\s*([A-Za-z]{1,8}\d+)/)?.[1]
 }

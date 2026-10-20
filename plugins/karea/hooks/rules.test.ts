@@ -13,6 +13,7 @@ import {
   trackOpenDecisions,
   analyzePrompt,
   progressEvents,
+  readsTask,
   receipt,
   rereadContext,
   recapText,
@@ -96,6 +97,17 @@ test('a Karea write counts for the active task only when it names it (KA983)', a
   expect(writeTouchesTask(['KA982'], active)).toBe(false)
   expect(writeTouchesTask([], active)).toBe(false)
   expect(writeTouchesTask(['JN31'], null)).toBe(false)
+})
+
+test('reading the active task counts as pulling its changes (KA995)', async () => {
+  const active = { shortid: 'JN31', id: '11111111-2222-4333-8444-555555555555' }
+  expect(readsTask('mcp__karea__karea_read', { action: 'karea_view_task', params: { task: 'JN31' } }, active)).toBe(true)
+  expect(readsTask('mcp__karea__karea_read', { action: 'karea_get_context', params: { task: active.id } }, active)).toBe(true)
+  expect(readsTask('mcp__karea__karea_read', { action: 'karea_view_tasks', params: { tasks: ['KA1', 'jn31'] } }, active)).toBe(true)
+  expect(readsTask('mcp__karea__karea_read', { action: 'karea_view_task', params: { task: 'KA1' } }, active)).toBe(false)
+  expect(readsTask('mcp__karea__karea_read', { action: 'karea_list_tasks', params: {} }, active)).toBe(false)
+  expect(readsTask('mcp__karea__karea_notes_write', { action: 'karea_add_note', params: { task: 'JN31' } }, active)).toBe(false)
+  expect(readsTask('mcp__karea__karea_read', { action: 'karea_view_task', params: { task: 'JN31' } }, null)).toBe(false)
 })
 
 test('pending list dedupes and stays short', async () => {
