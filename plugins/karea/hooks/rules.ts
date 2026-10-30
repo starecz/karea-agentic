@@ -42,7 +42,7 @@ const GENERAL: Rule[] = [
 ]
 
 const SALESFORCE: Rule[] = [
-  { pattern: /\bsf\s+project\s+deploy\s+(start|quick|resume)\b/, label: c => `deployed to ${org(c)}`, ok: /Status:\s*Succeeded|Deploy Succeeded/i, bad: /Status:\s*Failed|Component Failures|\bError\b/ },
+  { pattern: /\bsf\s+project\s+deploy\s+(start|quick|resume)\b/, label: c => `deployed to ${org(c)}`, ok: /Status:\s*Succeeded|Deploy Succeeded|["']status["']\s*:\s*["']Succeeded["']/i, bad: /Status:\s*Failed|Component Failures|\bError\b|["']status["']\s*:\s*["'](Failed|SucceededPartial|Canceled)["']/ },
   { pattern: /\bsf\s+data\s+(create|update|delete|upsert|import)\b/, label: c => `changed data in ${org(c)}`, bad: /\b(error|failed)\b/i },
 ]
 
@@ -55,7 +55,7 @@ function rulesFor(preset: Preset): Rule[] {
   return [...GIT, ...GENERAL, ...SALESFORCE]
 }
 
-export function progressEvents(command: string, output: string, preset: Preset = 'git', extra = ''): string[] {
+export function progressEvents(command: string, output: string, preset: Preset = 'both', extra = ''): string[] {
   const events: string[] = []
   for (const rule of [...rulesFor(preset), ...customRules(extra)]) {
     if (!rule.pattern.test(command)) continue
@@ -65,6 +65,25 @@ export function progressEvents(command: string, output: string, preset: Preset =
     if (!events.includes(text)) events.push(text)
   }
   return events
+}
+
+const EDIT_TOOLS: Record<string, string> = { Edit: 'file_path', Write: 'file_path', NotebookEdit: 'notebook_path' }
+
+/** KA1075: a file edit inside the working directory is progress: `edited <path relative to cwd>`. */
+export function editEvent(tool: string, input: Record<string, unknown>, cwd: string): string | undefined {
+  const key = EDIT_TOOLS[tool]
+  const path = key ? input[key] : undefined
+  if (typeof path !== 'string' || path.trim() === '') return undefined
+  const root = cwd.replace(/\/+$/, '')
+  let rel: string
+  if (path.startsWith('/')) {
+    if (root === '' || !path.startsWith(`${root}/`)) return undefined
+    rel = path.slice(root.length + 1)
+  } else {
+    rel = path.replace(/^(\.\/)+/, '')
+  }
+  if (rel === '' || rel === '..' || rel.startsWith('../') || rel.includes('/../')) return undefined
+  return `edited ${rel}`
 }
 
 export function customRules(spec: string): Rule[] {
@@ -394,6 +413,11 @@ export function syncAllPrompt(tasks: readonly Touched[]): string {
 /** KA813: an entry is stale until it is rewritten after the session's first event, whatever was synced since. */
 export function staleSince(entries: readonly ContextAge[], firstEventAt: number): Set<string> {
   return firstEventAt === 0 ? new Set() : new Set(entries.filter(entry => entry.updatedAt < firstEventAt).map(entry => entry.title))
+}
+
+/** KA1075: Claude is told about unsynced work every turn until a Karea write clears it. */
+export function unsyncedContext(shortid: string, pending: readonly string[]): string {
+  return `Unsynced on ${shortid}: ${pending.join('; ')}. Update its Context this turn (or tell the user why not).`
 }
 
 export function rereadContext(shortid: string, reason: string): string {

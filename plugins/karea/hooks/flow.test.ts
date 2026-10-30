@@ -200,3 +200,31 @@ test('a sync counts only once its turn ends, and it re-checks the whole context'
   const after = await $.command.run({ command: 'ksync', args: 'status' } as never)
   expect(after.text).toContain('Nothing waiting to be synced.')
 })
+
+test('KA1075: edits are pending and Claude is told every turn until a Karea write clears them', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-10-07T10:00:00Z') })
+  mock.env(on, { HOME: '/tmp' })
+  on('session.cwd', () => ({ value: '/work/repo' }) as never)
+  on('tool.call', ($, e) => (e.tool === 'Bash' ? shell(e.command) : { result: '', text: '' }) as never)
+  on('prompt.submit', ($, e) => e as never)
+  const ask = async (text: string) =>
+    ((await $.prompt.submit({ text, origin: { kind: 'composer' } } as never)) as unknown as { context?: string[] }).context ?? []
+
+  await $.command.run({ command: 'ksync', args: 'pick KA9' } as never)
+  expect((await ask('start')).join('\n')).not.toContain('Unsynced on')
+
+  await $.tool.call({ tool: 'Edit', file_path: '/work/repo/src/a.ts', old_string: 'a', new_string: 'b' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/work/repo/src/a.ts', old_string: 'b', new_string: 'c' } as never)
+  await $.tool.call({ tool: 'Write', file_path: '/other/notes.md', content: 'x' } as never)
+  const status = await $.command.run({ command: 'ksync', args: 'status' } as never)
+  expect(status.text).toContain('Not synced yet: edited src/a.ts')
+  expect(status.text).not.toContain('notes.md')
+
+  const first = await ask('next')
+  expect(first).toContain('Unsynced on KA9: edited src/a.ts. Update its Context this turn (or tell the user why not).')
+  const second = await ask('and again')
+  expect(second.some(line => line.startsWith('Unsynced on KA9'))).toBe(true)
+
+  await $.tool.call({ tool: 'mcp__karea__karea_notes_write', action: 'karea_set_context', params: { task: 'KA9', title: 'Plan', context: 'Edited a.ts' } } as never)
+  expect((await ask('done?')).join('\n')).not.toContain('Unsynced on')
+})

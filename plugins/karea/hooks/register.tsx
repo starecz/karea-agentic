@@ -39,6 +39,8 @@ import {
   parseCommand,
   pickContext,
   progressEvents,
+  editEvent,
+  unsyncedContext,
   recapText,
   receipt,
   rereadContext,
@@ -224,7 +226,7 @@ type Config = {
 let cfg: Config = {
   api: { baseUrl: 'https://karea.app', apiKey: '' },
   hasApi: false,
-  preset: 'git',
+  preset: 'both',
   extraPatterns: '',
   pollMs: 300000,
   showReceipts: true,
@@ -232,6 +234,15 @@ let cfg: Config = {
   proposeStatus: false,
   mcpServer: '',
   writeStatusFile: false,
+}
+
+async function recordProgress($: EngineInterface, found: readonly string[]) {
+  if (found.length === 0 || !(await read($, active))) return
+  const now = await $.clock.now()
+  await update($, pending, list => addPending(list, found))
+  await update($, events, list => addEvents(list, found, now))
+  await rememberTouched($)
+  await refreshChip($)
 }
 
 async function refreshChip($: EngineInterface) {
@@ -698,7 +709,7 @@ export const register: Register = (on, options) => {
   cfg = {
     api,
     hasApi: api.apiKey.trim() !== '',
-    preset: String(options.preset ?? 'git') as Preset,
+    preset: String(options.preset ?? 'both') as Preset,
     extraPatterns: String(options.extraPatterns ?? ''),
     pollMs: Math.max(60, Number(options.pollSeconds ?? 300)) * 1000,
     showReceipts: options.receipts !== false,
@@ -847,6 +858,8 @@ export const register: Register = (on, options) => {
       return next({ ...e, context: [...(e.context ?? []), briefContext(task.shortid)] })
     }
 
+    const list = await read($, pending)
+    const unsynced = list.length > 0 ? [unsyncedContext(task.shortid, list)] : []
     const awayMinutes = previous === 0 ? 0 : Math.round((now - previous) / 60000)
     const reason =
       changes.length > 0
@@ -856,14 +869,14 @@ export const register: Register = (on, options) => {
           : awayMinutes * 60000 >= AWAY_MS
             ? `The user was away for ${awayMinutes} minutes.`
             : undefined
-    if (reason === undefined) return next(e)
+    if (reason === undefined) return unsynced.length > 0 ? next({ ...e, context: [...(e.context ?? []), ...unsynced] }) : next(e)
 
     if (changes.length > 0) {
       await update($, remote, () => null)
       await update($, watermark, () => now)
       await refreshChip($)
     }
-    return next({ ...e, context: [...(e.context ?? []), rereadContext(task.shortid, reason)] })
+    return next({ ...e, context: [...(e.context ?? []), rereadContext(task.shortid, reason), ...unsynced] })
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
@@ -941,14 +954,14 @@ export const register: Register = (on, options) => {
         interrupted?: boolean
       }
       if (out.backgroundTaskId || out.interrupted) return ran
-      const found = progressEvents(e.command, `${out.stdout ?? ''}\n${out.stderr ?? ''}`, preset, extraPatterns)
-      if (found.length > 0 && (await read($, active))) {
-        const now = await $.clock.now()
-        await update($, pending, list => addPending(list, found))
-        await update($, events, list => addEvents(list, found, now))
-        await rememberTouched($)
-        await refreshChip($)
-      }
+      await recordProgress($, progressEvents(e.command, `${out.stdout ?? ''}\n${out.stderr ?? ''}`, preset, extraPatterns))
+      return ran
+    }
+
+    if (tool === 'Edit' || tool === 'Write' || tool === 'NotebookEdit') {
+      const cwd = await $.session.cwd().catch(() => '')
+      const edited = editEvent(tool, input, cwd)
+      if (edited) await recordProgress($, [edited])
     }
     return ran
   }).catch(($, e, next) => next(e))

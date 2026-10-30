@@ -33,7 +33,7 @@
         "salesforce",
         "both"
       ],
-      "default": "git"
+      "default": "both"
     },
     "extraPatterns": {
       "type": "string",

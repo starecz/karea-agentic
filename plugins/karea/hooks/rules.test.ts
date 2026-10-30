@@ -15,6 +15,8 @@ import {
   trackOpenDecisions,
   analyzePrompt,
   progressEvents,
+  editEvent,
+  unsyncedContext,
   readsTask,
   receipt,
   rereadContext,
@@ -45,6 +47,41 @@ test('deploys are not progress unless a preset asks for them', async () => {
   expect(progressEvents(`${deploy} 2>&1 | tail -20`, 'Error (1): Deploy failed.', 'salesforce')).toEqual([])
   expect(progressEvents('npx prisma migrate deploy', 'All migrations have been applied', 'general')).toEqual(['ran migrations'])
   expect(progressEvents('make release', '', 'git', 'released=\\bmake release\\b;bad=(')).toEqual(['released'])
+})
+
+test('KA1075: the default preset counts git, general and Salesforce work', async () => {
+  const deploy = 'sf project deploy start -o acme-dev2 -d src'
+  expect(progressEvents(deploy, 'Status: Succeeded')).toEqual(['deployed to acme-dev2'])
+  expect(progressEvents('npx prisma migrate deploy', 'All migrations have been applied')).toEqual(['ran migrations'])
+  expect(progressEvents('git commit -m a', COMMITTED)).toEqual(['committed'])
+  expect(progressEvents('sf data update record -s Case -o uat', 'Successfully updated record')).toEqual(['changed data in uat'])
+})
+
+test('KA1075: sf deploy with --json output counts on success only', async () => {
+  const deploy = 'sf project deploy start -o scv --json'
+  const ok = JSON.stringify({ status: 0, result: { status: 'Succeeded', success: true, numberComponentsDeployed: 3 } }, null, 2)
+  const failed = JSON.stringify({ status: 1, name: 'DeployFailed', result: { status: 'Failed', success: false } }, null, 2)
+  const partial = JSON.stringify({ status: 0, result: { status: 'SucceededPartial' } })
+  expect(progressEvents(deploy, ok, 'salesforce')).toEqual(['deployed to scv'])
+  expect(progressEvents(deploy, failed, 'salesforce')).toEqual([])
+  expect(progressEvents(deploy, partial, 'salesforce')).toEqual([])
+  expect(progressEvents(deploy, "{ 'status': 'Succeeded' }", 'salesforce')).toEqual(['deployed to scv'])
+})
+
+test('KA1075: file edits inside the working directory are progress', async () => {
+  const cwd = '/home/me/repo/'
+  expect(editEvent('Edit', { file_path: '/home/me/repo/src/a.ts' }, cwd)).toBe('edited src/a.ts')
+  expect(editEvent('Write', { file_path: '/home/me/repo/README.md' }, cwd)).toBe('edited README.md')
+  expect(editEvent('NotebookEdit', { notebook_path: '/home/me/repo/nb/x.ipynb' }, cwd)).toBe('edited nb/x.ipynb')
+  expect(editEvent('Edit', { file_path: './src/b.ts' }, cwd)).toBe('edited src/b.ts')
+  expect(editEvent('Edit', { file_path: '/home/me/repo-other/a.ts' }, cwd)).toBe(undefined)
+  expect(editEvent('Write', { file_path: '/tmp/scratch.txt' }, cwd)).toBe(undefined)
+  expect(editEvent('Edit', { file_path: '../elsewhere/a.ts' }, cwd)).toBe(undefined)
+  expect(editEvent('Read', { file_path: '/home/me/repo/src/a.ts' }, cwd)).toBe(undefined)
+  expect(addPending(['edited src/a.ts', 'committed'], ['edited src/a.ts'])).toEqual(['committed', 'edited src/a.ts'])
+  expect(unsyncedContext('JN45', ['edited src/a.ts', 'deployed to scv'])).toBe(
+    'Unsynced on JN45: edited src/a.ts; deployed to scv. Update its Context this turn (or tell the user why not).',
+  )
 })
 
 test('keeps only decisions the developer made and questions for a named outside party', async () => {
