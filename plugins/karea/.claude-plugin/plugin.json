@@ -47,6 +47,12 @@
       "description": "Off by default. When on, after each reply a small Haiku call (billed to your account) reads the exchange to spot decisions about the task or open questions, and flags them as not synced.",
       "default": false
     },
+    "proposeStatus": {
+      "type": "boolean",
+      "title": "Propose status changes",
+      "description": "Off by default. When on, after each reply a small Haiku call (billed to your account; shared with decision spotting when both are on) judges whether the active task now looks in progress, blocked, in review or done, and offers to set that status. A No is not asked again for that task and status.",
+      "default": false
+    },
     "pollSeconds": {
       "type": "number",
       "title": "Check Karea every (seconds)",

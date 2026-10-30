@@ -52,6 +52,11 @@ import {
   parseFindings,
   trackOpenDecisions,
   readsTask,
+  parseStatusProposal,
+  KAREA_GREEN,
+  shouldProposeStatus,
+  STATUS_LABELS,
+  type ProposableStatus,
   taskRefsOf,
   writeTouchesTask,
   upsertTouched,
@@ -157,6 +162,9 @@ const lastPrompt = atom({ plugin: 'karea', key: 'lastPrompt' } as const, '')
 const turnWrote = atom({ plugin: 'karea', key: 'turnWrote' } as const, false)
 // KA813: a sync turn is under way; its Karea writes count only once the turn ends.
 const syncing = atom({ plugin: 'karea', key: 'syncing' } as const, false)
+// KA1065: a status the conversation suggests for the active task, and the ones the user said no to.
+const statusProposal = atom({ plugin: 'karea', key: 'statusProposal' } as const, null as { shortid: string; to: string } | null)
+const declinedStatus = atom({ plugin: 'karea', key: 'declinedStatus' } as const, [] as string[])
 const earlier = atom({ plugin: 'karea', key: 'earlier' } as const, null)
 const openDecisions = atom({ plugin: 'karea', key: 'openDecisions' } as const, [])
 const lastCheckAt = atom({ plugin: 'karea', key: 'lastCheckAt' } as const, 0)
@@ -208,6 +216,7 @@ type Config = {
   pollMs: number
   showReceipts: boolean
   detectDecisions: boolean
+  proposeStatus: boolean
   mcpServer: string
   writeStatusFile: boolean
 }
@@ -220,6 +229,7 @@ let cfg: Config = {
   pollMs: 300000,
   showReceipts: true,
   detectDecisions: false,
+  proposeStatus: false,
   mcpServer: '',
   writeStatusFile: false,
 }
@@ -511,6 +521,30 @@ async function poll($: EngineInterface) {
   }
 }
 
+// KA1065: the user accepted the proposed status: set it in Karea and on the chip.
+async function applyStatusProposal($: EngineInterface) {
+  const proposal = await read($, statusProposal)
+  const task = await read($, active)
+  await update($, statusProposal, () => null)
+  if (!proposal || !task || task.shortid !== proposal.shortid) return
+  const ok = cfg.hasApi
+    ? await setStatus($, cfg.api, task.id, proposal.to).then(() => true, () => false)
+    : typeof (await kareaMcp($, 'karea_tasks_write', 'karea_edit_task', { task: task.id || task.shortid, status: proposal.to })) === 'string'
+  if (!ok) {
+    $.ui.toast(`Could not set ${task.shortid} to ${STATUS_LABELS[proposal.to as ProposableStatus] ?? proposal.to}`)
+    return
+  }
+  await update($, active, current => (current ? { ...current, status: proposal.to } : current))
+  $.ui.toast(`${task.shortid} is now ${STATUS_LABELS[proposal.to as ProposableStatus] ?? proposal.to}`)
+  await refreshChip($)
+}
+
+async function declineStatusProposal($: EngineInterface) {
+  const proposal = await read($, statusProposal)
+  await update($, statusProposal, () => null)
+  if (proposal) await update($, declinedStatus, list => [...list.filter(k => k !== `${proposal.shortid}:${proposal.to}`), `${proposal.shortid}:${proposal.to}`].slice(-50))
+}
+
 async function analyzeTurn($: EngineInterface, prompt: string, answer: string) {
   const context = await read($, earlier)
   const openBefore = await read($, openDecisions)
@@ -525,8 +559,14 @@ async function analyzeTurn($: EngineInterface, prompt: string, answer: string) {
     })
     .catch(() => undefined)
   if (!reply) return
-  if (reply?.isAnswered) await update($, openDecisions, open => trackOpenDecisions(open, reply.text))
+  if (reply?.isAnswered && cfg.detectDecisions) await update($, openDecisions, open => trackOpenDecisions(open, reply.text))
   if (!reply.isAnswered || (await read($, turnWrote)) || !(await read($, active))) return
+  const task = await read($, active)
+  const proposed = cfg.proposeStatus ? parseStatusProposal(reply.text) : undefined
+  if (task && shouldProposeStatus(task.status, proposed, await read($, declinedStatus), task.shortid)) {
+    await update($, statusProposal, () => ({ shortid: task.shortid, to: proposed }))
+  }
+  if (!cfg.detectDecisions) return
   const found = parseFindings(reply.text, openBefore)
   if (found.length === 0) return
   const now = await $.clock.now()
@@ -663,6 +703,7 @@ export const register: Register = (on, options) => {
     pollMs: Math.max(60, Number(options.pollSeconds ?? 300)) * 1000,
     showReceipts: options.receipts !== false,
     detectDecisions: options.detectDecisions === true,
+    proposeStatus: options.proposeStatus === true,
     mcpServer: String(options.mcpServer ?? '').trim(),
     writeStatusFile: options.statusFile === true,
   }
@@ -832,7 +873,7 @@ export const register: Register = (on, options) => {
       await update($, syncing, () => false)
       if ((await read($, turnWrote)) && (await read($, active))) await markTaskSynced($)
     }
-    if (!cfg.detectDecisions || e.agentId !== undefined || e.reason !== 'answer') return done
+    if (!(cfg.detectDecisions || cfg.proposeStatus) || e.agentId !== undefined || e.reason !== 'answer') return done
     if ((await read($, turnWrote)) || !(await read($, active))) return done
     const prompt = await read($, lastPrompt)
     const { answer } = e
@@ -938,7 +979,9 @@ export const register: Register = (on, options) => {
     const list = await read($, pending)
     const changes = (await read($, remote))?.lines ?? []
     const armed = await read($, clearArmed)
-    if (list.length === 0 && changes.length === 0) return below
+    const proposal = await read($, statusProposal)
+    const proposing = proposal && proposal.shortid === task.shortid && proposal.to !== task.status ? proposal : null
+    if (list.length === 0 && changes.length === 0 && !proposing) return below
 
     const { Box, Text, Button } = $.ui.resolve(e)
     const syncNow = () => void startSync($, task.shortid)
@@ -967,6 +1010,14 @@ export const register: Register = (on, options) => {
             {changes.map(line => (
               <Text dimColor> · {line}</Text>
             ))}
+          </Box>
+        )}
+        {proposing && (
+          <Box flexDirection="row" flexWrap="wrap">
+            <Text color={KAREA_GREEN}>◆ {task.shortid} looks {STATUS_LABELS[proposing.to as ProposableStatus] ?? proposing.to} now </Text>
+            <Text dimColor>(it is {task.status || 'open'}) </Text>
+            <Button key="status-yes" label={`Set to ${STATUS_LABELS[proposing.to as ProposableStatus] ?? proposing.to}`} variant="primary" onPress={() => void applyStatusProposal($)} />
+            <Button key="status-no" label="No" onPress={() => void declineStatusProposal($)} />
           </Box>
         )}
         {list.length > 0 && (

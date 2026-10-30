@@ -1,6 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  parseStatusProposal,
+  shouldProposeStatus,
   addPending,
   changeLine,
   chip,
@@ -254,4 +256,20 @@ test('deletes and unlinks count as Karea writes; the re-read names the exact cal
   expect(isKareaWrite('mcp__karea__karea_read', { action: 'karea_view_task', params: {} })).toBe(false)
   const text = rereadContext('KA9', 'The user was away for 50 minutes.')
   for (const call of ['karea_read', 'karea_view_task', 'karea_get_context', 'karea_list_notes', 'karea_list_questions']) expect(text).toContain(call)
+})
+
+test('KA1065: reads a proposable status from the analysis JSON', () => {
+    expect(parseStatusProposal('{"decisions":[],"questions":[],"status":"review"}')).toBe('review')
+    expect(parseStatusProposal('{"decisions":[],"questions":[],"status":""}')).toBeUndefined()
+    expect(parseStatusProposal('{"status":"open"}')).toBeUndefined()
+    expect(parseStatusProposal('{"status":"cancelled"}')).toBeUndefined()
+    expect(parseStatusProposal('not json')).toBeUndefined()
+})
+
+test('KA1065: proposes only a different status the user has not declined', () => {
+    expect(shouldProposeStatus('in_progress', 'review', [], 'KA1')).toBe(true)
+    expect(shouldProposeStatus('review', 'review', [], 'KA1')).toBe(false)
+    expect(shouldProposeStatus('in_progress', undefined, [], 'KA1')).toBe(false)
+    expect(shouldProposeStatus('in_progress', 'review', ['KA1:review'], 'KA1')).toBe(false)
+    expect(shouldProposeStatus('in_progress', 'review', ['KA2:review'], 'KA1')).toBe(true)
 })

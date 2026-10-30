@@ -93,7 +93,8 @@ export const ANALYZE_SYSTEM = [
   'why holds the stated reason, empty when none was given. settled is true only when the decision still stands at the end of the latest exchange: false when the assistant questioned it, pushed back, explained why it did otherwise, or asked the developer to confirm. A short reply like "yes" or "do it" settles a decision proposed or questioned earlier. When the latest exchange settles or drops one of the OPEN DECISIONS, report it with resolves set to that open decision\'s exact text, and settled true (decided) or false with kind "detail" (dropped). Leave out recaps of earlier decisions.',
   'questions: questions left unanswered at the end of the exchange. For each, answeredBy says who can answer it: "developer" (the developer can answer or decide it, including anything about the codebase, scripts, setup, environments, requirements defaults or what to do next), "assistant" (it can be found out by reading code, running something, checking an org or testing, even if nobody has done it yet), "external" (only a specific person or group outside this session can answer it: a client, a stakeholder, another team, a product owner), or "future" (see below). For "external", party names who, as written in the exchange; leave it empty when nobody is named.',
   '"future" is rare and strict: a "why does X happen" unknown that stayed UNRESOLVED AFTER REAL INVESTIGATION in this exchange (things were actually tried or checked and none explained it) AND is likely to come back later. For it, tried lists what was already tried, and recurs says why it will come back. It is never: something nobody has looked into yet, a todo or next step, a bug to fix, a missing tool, token or access, a requirement or default to decide, or a scope question.',
-  'Reply with JSON only, each text under 14 words: {"decisions":[{"text":"...","madeBy":"developer","kind":"solution","why":"...","settled":true,"resolves":""}],"questions":[{"text":"...","answeredBy":"developer","party":"","tried":"","recurs":""}]}',
+  'status: the status the tracked task should have now, judged from the LATEST exchange only, and only when it says so clearly: "in_progress" (work on it has started or resumed), "blocked" (it cannot go on until someone or something outside the session acts), "review" (the work is finished and waits to be checked or merged), "done" (the developer says it is finished and accepted, shipped or closed). Leave it "" when the exchange does not clearly show a status, which is most of the time.',
+  'Reply with JSON only, each text under 14 words: {"decisions":[{"text":"...","madeBy":"developer","kind":"solution","why":"...","settled":true,"resolves":""}],"questions":[{"text":"...","answeredBy":"developer","party":"","tried":"","recurs":""}],"status":""}',
 ].join(' ')
 
 export type Exchange = { prompt: string; answer: string }
@@ -716,4 +717,37 @@ export function linkedNotice(shortid: string, label: string): string {
 
 export function linkInstruction(shortid: string, questionId: string, meetingId: string, label: string): string {
   return `Open question ${shortid} must be linked to the meeting ${label}: call karea_link_question_to_meeting with meetingId ${meetingId} and questionId ${questionId} now, then mention it in one short line.`
+}
+
+// KA1065: the statuses the turn analysis may propose for the active task.
+export const PROPOSABLE_STATUSES = ['in_progress', 'blocked', 'review', 'done'] as const
+export type ProposableStatus = (typeof PROPOSABLE_STATUSES)[number]
+
+export const STATUS_LABELS: Record<ProposableStatus, string> = {
+  in_progress: 'In progress',
+  blocked: 'Blocked',
+  review: 'Review',
+  done: 'Done',
+}
+
+export function parseStatusProposal(text: string): ProposableStatus | undefined {
+  const json = text.match(/\{[\s\S]*\}/)?.[0]
+  if (!json) return undefined
+  try {
+    const status = (JSON.parse(json) as { status?: unknown }).status
+    return (PROPOSABLE_STATUSES as readonly string[]).includes(String(status)) ? (status as ProposableStatus) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Offered once per task and status: a "No" is not asked again.
+export function shouldProposeStatus(
+  current: string,
+  proposed: ProposableStatus | undefined,
+  declined: readonly string[],
+  shortid: string,
+): proposed is ProposableStatus {
+  if (!proposed || proposed === current) return false
+  return !declined.includes(`${shortid}:${proposed}`)
 }

@@ -37,6 +37,8 @@ declare module 'claude-code' {
       seenChanges: string[]
       briefPending: boolean
       syncing: boolean
+      statusProposal: { shortid: string; to: string } | null
+      declinedStatus: string[]
     }
   }
 }

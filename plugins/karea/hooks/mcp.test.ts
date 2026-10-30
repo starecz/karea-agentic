@@ -157,3 +157,71 @@ test('reads the status as Karea prints it, with spaces', () => {
   expect(parseViewTask(viewText('in_progress', []))?.status).toBe('in_progress')
   expect(parseViewTask(viewText('review', []))?.status).toBe('review')
 })
+
+test('KA1065: a reply that says the task is finished offers Review; Yes sets it, No is not asked again', { options: { proposeStatus: true } }, async ($, on) => {
+  const clock = mock.clock(on, { now: Date.parse('2026-10-07T10:00:00Z') })
+  mock.env(on, { HOME: '/tmp' })
+  let status = 'open'
+  const edits: unknown[] = []
+  on('mcp.call', ($, e) => {
+    const { server, args } = e as unknown as { server: string; args: { action: string; params: Record<string, unknown> } }
+    if (server !== 'claude.ai Karea') throw new Error('not connected')
+    if (args.action === 'karea_edit_task') { edits.push(args.params); if (typeof args.params.status === 'string') status = args.params.status }
+    const text = args.action === 'karea_view_task' ? viewText(status, []) : args.action === 'karea_get_context' ? contextText('mcp', '2026-10-07 09:00') : 'Task updated.'
+    return { value: { content: [{ type: 'text', text }], isError: false } } as never
+  })
+  let verdict = 'review'
+  on('model.complete', () =>
+    ({ value: { isAnswered: true, text: `{"decisions":[],"questions":[],"status":"${verdict}"}`, usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } }) as never,
+  )
+  on('session.id', () => ({ value: 'session-1' }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', ($, e) => e as never)
+  on('tool.call', () => ({ result: '', text: '' }) as never)
+  on('turn.complete', ($, e) => e as never)
+  on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as never)
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'ksync', args: 'pick KA747' } as never)
+  const band = { component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10 } as never } as const
+
+  await $.turn.complete({ reason: 'answer', answer: 'All tests pass, the PR is open for review.', text: '', turnId: 't1' } as never)
+  await clock.advance(10)
+  let ui = await $.ui.mount({ plugin: 'karea', surface: 'terminal', ...band })
+  expect(await ui.find({ key: 'status-yes' })).not.toBe(undefined)
+  await ui.press({ key: 'status-yes' })
+  expect(edits.at(-1)).toMatchObject({ status: 'review' })
+  await ui.unmount()
+
+  verdict = 'done'
+  await $.turn.complete({ reason: 'answer', answer: 'Merged and released.', text: '', turnId: 't2' } as never)
+  await clock.advance(10)
+  ui = await $.ui.mount({ plugin: 'karea', surface: 'terminal', ...band })
+  await ui.press({ key: 'status-no' })
+  await ui.unmount()
+  await $.turn.complete({ reason: 'answer', answer: 'Released again.', text: '', turnId: 't3' } as never)
+  await clock.advance(10)
+  ui = await $.ui.mount({ plugin: 'karea', surface: 'terminal', ...band })
+  expect(await ui.find({ key: 'status-yes' })).toBe(undefined)
+  expect(edits.filter((p) => (p as { status?: string }).status === 'done')).toHaveLength(0)
+  await ui.unmount()
+})
+
+test('KA1065: no proposal unless the option is on', async ($, on) => {
+  const clock = mock.clock(on, { now: Date.parse('2026-10-07T10:00:00Z') })
+  mock.env(on, { HOME: '/tmp' })
+  let called = false
+  on('mcp.call', () => ({ value: { content: [{ type: 'text', text: viewText('open', []) }], isError: false } }) as never)
+  on('model.complete', () => { called = true; return { value: { isAnswered: true, text: '{"status":"review"}', usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } } as never })
+  on('session.id', () => ({ value: 'session-1' }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', ($, e) => e as never)
+  on('tool.call', () => ({ result: '', text: '' }) as never)
+  on('turn.complete', ($, e) => e as never)
+  on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as never)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'ksync', args: 'pick KA747' } as never)
+  await $.turn.complete({ reason: 'answer', answer: 'Done, PR open.', text: '', turnId: 't1' } as never)
+  await clock.advance(10)
+  expect(called).toBe(false)
+})
