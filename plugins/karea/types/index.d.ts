@@ -36,6 +36,7 @@ declare module 'claude-code' {
       lastCheckAt: number
       seenChanges: string[]
       briefPending: boolean
+      syncing: boolean
     }
   }
 }
