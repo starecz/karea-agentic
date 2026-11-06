@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  askedForQuestion,
   parseStatusProposal,
   shouldProposeStatus,
   addPending,
@@ -309,4 +310,9 @@ test('KA1065: proposes only a different status the user has not declined', () =>
     expect(shouldProposeStatus('in_progress', undefined, [], 'KA1')).toBe(false)
     expect(shouldProposeStatus('in_progress', 'review', ['KA1:review'], 'KA1')).toBe(false)
     expect(shouldProposeStatus('in_progress', 'review', ['KA2:review'], 'KA1')).toBe(true)
+})
+
+test('KA1106: which prompts ask for an open question in so many words', async () => {
+  for (const yes of ['create an open question about the UAT refresh', 'Add a question to KA12 for the team', 'raise an open question on pricing', 'log open questions for these', 'crea una pregunta abierta']) expect(askedForQuestion(yes)).toBe(true)
+  for (const no of ['fix the login bug', 'any open questions on this?', 'what is the question here', 'ask me if unsure', '']) expect(askedForQuestion(no)).toBe(false)
 })

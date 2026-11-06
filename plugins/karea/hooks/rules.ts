@@ -728,7 +728,27 @@ export function questionIds(text: string | undefined): { id: string; shortid: st
 }
 
 export const NO_MEETING = 'No meeting, task only'
-export const ASK_MEETING = "I'm about to create this open question. Link it to a meeting, or keep it attached only to the task?"
+export const DONT_CREATE = "Don't create it"
+export const CREATE_IT = 'Create it'
+
+// KA1106: the prompts show the question itself, so the user knows what it is about.
+export function askMeeting(question: string, confirm: boolean): string {
+  const lead = confirm ? 'Claude wants to create this open question' : "I'm about to create this open question"
+  return `${lead}:\n"${clip(question.replace(/\s+/g, ' ').trim(), 240)}"\nLink it to a meeting, or keep it attached only to the task?`
+}
+
+export function askCreate(question: string): string {
+  return `Claude wants to create this open question:\n"${clip(question.replace(/\s+/g, ' ').trim(), 240)}"\nCreate it?`
+}
+
+export const DECLINED_QUESTION = 'The user chose not to create this open question. Do not create it or ask it again in another form; carry on without it and mention it in one short line.'
+
+// KA1106: a question the user asked for in so many words needs no confirmation.
+export function askedForQuestion(prompt: string): boolean {
+  return /\b(create|add|make|raise|log|file|put|write|start)\b[^.?!\n]{0,40}\b(open[- ]?)?questions?\b/i.test(prompt)
+    || /\bopen (a|an|new)\b[^.?!\n]{0,30}\bquestions?\b/i.test(prompt)
+    || /\b(crea|crear|añade|añadir|abre|abrir|pon|nueva)\b[^.?!\n]{0,40}\bpreguntas?\b/i.test(prompt)
+}
 
 // KA991: a typed answer to the meeting question, passed on to Claude instead of being dropped.
 export function freeMeetingAnswerInstruction(shortid: string, questionId: string, answer: string): string {

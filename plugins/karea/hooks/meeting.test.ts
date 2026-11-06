@@ -109,8 +109,8 @@ test('with no setting, the user is asked and the chosen meeting is linked', asyn
     return { result: '', text: CREATED } as never
   })
   await $.tool.call(CREATE as never)
-  expect(asked).toBe("I'm about to create this open question. Link it to a meeting, or keep it attached only to the task?")
-  expect(offered[offered.length - 1]).toBe('No meeting, task only')
+  expect(asked).toBe('Claude wants to create this open question:\n"Will UAT be refreshed?"\nLink it to a meeting, or keep it attached only to the task?')
+  expect(offered.slice(-2)).toEqual(['No meeting, task only', "Don't create it"])
   expect(links).toEqual([{ meetingId: 'aaaaaaaa-0000-4000-8000-000000000002', questionId: '0f0e0d0c-1111-2222-3333-444455556666' }])
 })
 
@@ -124,4 +124,89 @@ test('if the mod cannot link the question itself, Claude is told exactly how to 
   on('tool.call', () => ({ result: '', text: CREATED }) as never)
   const ran = (await $.tool.call(CREATE as never)) as { context?: string[] }
   expect(ran.context?.join(' ')).toContain('call karea_link_question_to_meeting with meetingId aaaaaaaa-0000-4000-8000-000000000002 and questionId 0f0e0d0c-1111-2222-3333-444455556666')
+})
+
+type Asked = { question: string; options: string[] }
+function asker(answer: (q: Asked) => string, seen: Asked[], created: string[]) {
+  return ($: unknown, e: unknown) => {
+    const ev = e as { tool: string; questions?: { question: string; options: { label: string }[] }[] }
+    if (ev.tool === 'AskUserQuestion') {
+      const q = { question: ev.questions?.[0]?.question ?? '', options: ev.questions?.[0]?.options.map(o => o.label) ?? [] }
+      seen.push(q)
+      return { result: { answers: { [q.question]: answer(q) } }, text: '' } as never
+    }
+    created.push(ev.tool)
+    return { result: '', text: CREATED } as never
+  }
+}
+
+test("KA1106: Don't create it refuses the call: the question is not created and Claude is told", async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  const links: { meetingId: string; questionId: string }[] = []
+  const seen: Asked[] = []
+  const created: string[] = []
+  on('mcp.call', server(links))
+  on('tool.call', asker(() => "Don't create it", seen, created))
+  const ran = (await $.tool.call(CREATE as never)) as { deny?: string }
+  expect(seen[0]?.question).toContain('"Will UAT be refreshed?"')
+  expect(created).toEqual([])
+  expect(links).toEqual([])
+  expect(ran.deny).toContain('chose not to create this open question')
+})
+
+test('KA1106: with a meeting set, Claude still needs a yes, and the prompt shows the question', { options: { questionMeeting: 'Daily Scrum' } }, async ($, on) => {
+  mock.clock(on, { now: at(8, 13, 5) })
+  const links: { meetingId: string; questionId: string }[] = []
+  const seen: Asked[] = []
+  const created: string[] = []
+  on('mcp.call', server(links))
+  on('tool.call', asker(() => "Don't create it", seen, created))
+  const ran = (await $.tool.call(CREATE as never)) as { deny?: string }
+  expect(seen[0]).toEqual({ question: 'Claude wants to create this open question:\n"Will UAT be refreshed?"\nCreate it?', options: ['Create it', "Don't create it"] })
+  expect(created).toEqual([])
+  expect(ran.deny).toBeDefined()
+})
+
+test("KA1106: with 'none', a yes creates it and nothing is linked", { options: { questionMeeting: 'none' } }, async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  const links: { meetingId: string; questionId: string }[] = []
+  const seen: Asked[] = []
+  const created: string[] = []
+  on('mcp.call', server(links))
+  on('tool.call', asker(() => 'Create it', seen, created))
+  await $.tool.call(CREATE as never)
+  expect(seen).toHaveLength(1)
+  expect(created).toEqual(['mcp__karea__karea_meetings_write'])
+  expect(links).toEqual([])
+})
+
+test('KA1106: a question the user asked for is not confirmed; the meeting prompt still shows it', async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  const links: { meetingId: string; questionId: string }[] = []
+  const seen: Asked[] = []
+  const created: string[] = []
+  on('mcp.call', server(links))
+  on('prompt.submit', ($, e) => e as never)
+  on('tool.call', asker(q => q.options[0] ?? '', seen, created))
+  await $.prompt.submit({ text: 'create an open question about the UAT refresh', origin: { kind: 'composer' } } as never)
+  await $.tool.call(CREATE as never)
+  expect(seen).toHaveLength(1)
+  expect(seen[0]?.question).toBe('I\'m about to create this open question:\n"Will UAT be refreshed?"\nLink it to a meeting, or keep it attached only to the task?')
+  expect(seen[0]?.options).not.toContain("Don't create it")
+  expect(seen[0]?.options).toHaveLength(4)
+  expect(created).toEqual(['mcp__karea__karea_meetings_write'])
+  expect(links).toHaveLength(1)
+})
+
+test("KA1106: an asked-for question with 'none' goes straight through, nobody is asked", { options: { questionMeeting: 'none' } }, async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  const seen: Asked[] = []
+  const created: string[] = []
+  on('mcp.call', server([]))
+  on('prompt.submit', ($, e) => e as never)
+  on('tool.call', asker(() => "Don't create it", seen, created))
+  await $.prompt.submit({ text: 'please add a question for the team on whether UAT gets refreshed', origin: { kind: 'composer' } } as never)
+  await $.tool.call(CREATE as never)
+  expect(seen).toEqual([])
+  expect(created).toEqual(['mcp__karea__karea_meetings_write'])
 })

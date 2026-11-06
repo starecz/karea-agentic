@@ -13,7 +13,12 @@ import {
   TONE_COLORS,
   chip,
   chipView,
-  ASK_MEETING,
+  askMeeting,
+  askCreate,
+  askedForQuestion,
+  CREATE_IT,
+  DECLINED_QUESTION,
+  DONT_CREATE,
   NO_MEETING,
   meetingLabel,
   parseMeetings,
@@ -625,11 +630,15 @@ async function linkQuestionToMeeting($: EngineInterface, meetingId: string, ques
   return reasons.join('; ') || 'no Karea MCP server answered'
 }
 
-async function meetingForQuestion($: EngineInterface, tool: string, input: Record<string, unknown>) {
+type QuestionPlan = Meeting | { answer: string } | { declined: true } | undefined
+
+async function meetingForQuestion($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<QuestionPlan> {
   if (kareaAction(tool, input) !== 'karea_create_question') return undefined
   const params = kareaParams(input)
   const project = typeof params.projectId === 'string' ? params.projectId : ''
-  return chooseMeeting($, QUESTION_MEETING_SETTING, project)
+  const question = typeof params.question === 'string' ? params.question : ''
+  const confirm = !askedForQuestion(await read($, lastPrompt))
+  return chooseMeeting($, QUESTION_MEETING_SETTING, project, question, confirm)
 }
 
 async function linkCreatedQuestion(
@@ -650,16 +659,30 @@ async function linkCreatedQuestion(
   return linkInstruction(question.shortid, question.id, meeting.id, meetingLabel(meeting))
 }
 
-async function chooseMeeting($: EngineInterface, setting: string, project: string): Promise<Meeting | { answer: string } | undefined> {
-  if (setting.trim().toLowerCase() === 'none') return undefined
+// KA1106: unless the user asked for the question, creating it needs their yes: picking a meeting or
+// "task only" is that yes, "Don't create it" refuses. A prompt that cannot be shown does not block.
+async function confirmCreate($: EngineInterface, question: string): Promise<boolean> {
+  try {
+    return (await $.ui.ask(askCreate(question), { options: [CREATE_IT, DONT_CREATE], header: 'Question' })) !== DONT_CREATE
+  } catch {
+    return true
+  }
+}
+
+async function chooseMeeting($: EngineInterface, setting: string, project: string, question: string, confirm: boolean): Promise<QuestionPlan> {
+  const none = setting.trim().toLowerCase() === 'none'
+  if (none || setting.trim() !== '') {
+    if (confirm && !(await confirmCreate($, question))) return { declined: true }
+    return none ? undefined : pickMeeting(await upcomingMeetings($), setting, project)
+  }
   const meetings = await upcomingMeetings($)
-  if (setting.trim() !== '') return pickMeeting(meetings, setting, project)
   const seen = new Set<string>()
-  const next = meetings.filter(m => !seen.has(m.title) && (seen.add(m.title), true)).slice(0, 3)
-  if (next.length === 0) return undefined
+  const next = meetings.filter(m => !seen.has(m.title) && (seen.add(m.title), true)).slice(0, confirm ? 2 : 3)
+  if (next.length === 0) return confirm && !(await confirmCreate($, question)) ? { declined: true } : undefined
   const labels = next.map(meetingLabel)
   try {
-    const answer = await $.ui.ask(ASK_MEETING, { options: [...labels, NO_MEETING], header: 'Meeting' })
+    const answer = await $.ui.ask(askMeeting(question, confirm), { options: [...labels, NO_MEETING, ...(confirm ? [DONT_CREATE] : [])], header: 'Meeting' })
+    if (confirm && answer === DONT_CREATE) return { declined: true }
     const picked = next[labels.indexOf(answer)]
     if (picked) return picked
     return answer && answer !== NO_MEETING && answer.trim() ? { answer: answer.trim() } : undefined
@@ -901,7 +924,12 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('tool.call', async ($, e, next) => {
-    const meeting = await meetingForQuestion($, String(e.tool), e as unknown as Record<string, unknown>)
+    const plan = await meetingForQuestion($, String(e.tool), e as unknown as Record<string, unknown>)
+    if (plan && 'declined' in plan) {
+      $.ui.log('Open question not created: you said no.')
+      return { deny: DECLINED_QUESTION }
+    }
+    const meeting = plan
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError === true) return ran
     const linkContext = await linkCreatedQuestion($, meeting, ran.text)
