@@ -211,7 +211,7 @@ Link your current AI coding session (Claude Code, OpenCode, Codex, Cursor, Aider
 
 | Action | Use for |
 |---|---|
-| `karea_link_session` | Link the current session: `task`, `provider` (`claude-code` / `opencode` / `codex` / `cursor` / `aider` / `other`), `sessionId`, optional `label`. Call this automatically as soon as the user names the task they're working on (see "Session linking" below). Re-linking the same session refreshes its last-active stamp. |
+| `karea_link_session` | Link the current session: `task`, `provider` (`claude-code` / `opencode` / `codex` / `cursor` / `aider` / `other`), `sessionId`, optional `label`. Call this automatically as soon as the user names the task they're working on (see "Session linking" below). Re-linking the same session refreshes its last-active stamp. Inside a Karea Connect session (Claude Code started from Karea), the id is recognised and the Connect session itself is linked to the task, so it shows on the task and on the Connect page. |
 | `karea_list_sessions` | List AI sessions linked to a task (provider, session id, last active, row id). |
 | `karea_unlink_session` | Remove a linked session by its row id (from `karea_list_sessions`). |
 
