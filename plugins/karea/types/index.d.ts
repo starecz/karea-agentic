@@ -28,6 +28,7 @@ declare module 'claude-code' {
       needsReread: boolean
       clearArmed: boolean
       lastPrompt: string
+      questionPending: boolean
       chipNow: ChipState | null
       snapshot: SyncSnapshot | null
       turnWrote: boolean

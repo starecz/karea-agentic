@@ -62,7 +62,9 @@ test('with a meeting set, a new question is linked to its earliest occurrence no
   mock.clock(on, { now: at(8, 13, 5) })
   const links: { meetingId: string; questionId: string }[] = []
   on('mcp.call', server(links))
+  on('prompt.submit', ($, e) => e as never)
   on('tool.call', () => ({ result: '', text: CREATED }) as never)
+  await $.prompt.submit({ text: 'raise an open question on the UAT refresh', origin: { kind: 'composer' } } as never)
   const ran = (await $.tool.call(CREATE as never)) as { context?: string[] }
   expect(links).toEqual([{ meetingId: 'aaaaaaaa-0000-4000-8000-000000000002', questionId: '0f0e0d0c-1111-2222-3333-444455556666' }])
   expect(ran.context?.join(' ')).toContain('was linked to the meeting')
@@ -121,7 +123,9 @@ test('if the mod cannot link the question itself, Claude is told exactly how to 
     if (args.action === 'karea_list_meetings') return { value: { content: [{ type: 'text', text: LIST }], isError: false } } as never
     return { value: { content: [{ type: 'text', text: 'Permission denied by auto mode' }], isError: true } } as never
   })
+  on('prompt.submit', ($, e) => e as never)
   on('tool.call', () => ({ result: '', text: CREATED }) as never)
+  await $.prompt.submit({ text: 'raise an open question on the UAT refresh', origin: { kind: 'composer' } } as never)
   const ran = (await $.tool.call(CREATE as never)) as { context?: string[] }
   expect(ran.context?.join(' ')).toContain('call karea_link_question_to_meeting with meetingId aaaaaaaa-0000-4000-8000-000000000002 and questionId 0f0e0d0c-1111-2222-3333-444455556666')
 })
@@ -209,4 +213,46 @@ test("KA1106: an asked-for question with 'none' goes straight through, nobody is
   await $.tool.call(CREATE as never)
   expect(seen).toEqual([])
   expect(created).toEqual(['mcp__karea__karea_meetings_write'])
+})
+
+test('KA1106: a dismissed meeting prompt is not a yes: the question is held back and Claude asks in chat', async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  const seen: Asked[] = []
+  const created: string[] = []
+  on('mcp.call', server([]))
+  on('tool.call', asker(() => '', seen, created))
+  const ran = (await $.tool.call(CREATE as never)) as { deny?: string }
+  expect(seen).toHaveLength(1)
+  expect(created).toEqual([])
+  expect(ran.deny).toContain('did not confirm this open question')
+})
+
+test("KA1106: with 'none', a dismissed prompt holds it back; a yes in chat then creates it without asking again", { options: { questionMeeting: 'none' } }, async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  const seen: Asked[] = []
+  const created: string[] = []
+  on('mcp.call', server([]))
+  on('prompt.submit', ($, e) => e as never)
+  on('tool.call', asker(() => '', seen, created))
+  await $.prompt.submit({ text: 'fix the login bug', origin: { kind: 'composer' } } as never)
+  const first = (await $.tool.call(CREATE as never)) as { deny?: string }
+  expect(first.deny).toContain('did not confirm')
+  expect(created).toEqual([])
+  await $.prompt.submit({ text: 'yes, create it', origin: { kind: 'composer' } } as never)
+  await $.tool.call(CREATE as never)
+  expect(seen).toHaveLength(1)
+  expect(created).toEqual(['mcp__karea__karea_meetings_write'])
+})
+
+test('KA1106: a plain yes with nothing held back still needs the prompt', { options: { questionMeeting: 'none' } }, async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  const seen: Asked[] = []
+  const created: string[] = []
+  on('mcp.call', server([]))
+  on('prompt.submit', ($, e) => e as never)
+  on('tool.call', asker(() => "Don't create it", seen, created))
+  await $.prompt.submit({ text: 'yes', origin: { kind: 'composer' } } as never)
+  await $.tool.call(CREATE as never)
+  expect(seen).toHaveLength(1)
+  expect(created).toEqual([])
 })

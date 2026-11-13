@@ -743,12 +743,20 @@ export function askCreate(question: string): string {
 
 export const DECLINED_QUESTION = 'The user chose not to create this open question. Do not create it or ask it again in another form; carry on without it and mention it in one short line.'
 
-// KA1106: a question the user asked for in so many words needs no confirmation.
+// KA1106: a question the user asked for in so many words needs no confirmation. The verb must
+// govern the question ("add a question", "raise an open question"), not just sit near the word.
 export function askedForQuestion(prompt: string): boolean {
-  return /\b(create|add|make|raise|log|file|put|write|start)\b[^.?!\n]{0,40}\b(open[- ]?)?questions?\b/i.test(prompt)
-    || /\bopen (a|an|new)\b[^.?!\n]{0,30}\bquestions?\b/i.test(prompt)
-    || /\b(crea|crear|añade|añadir|abre|abrir|pon|nueva)\b[^.?!\n]{0,40}\bpreguntas?\b/i.test(prompt)
+  return /\b(create|add|make|raise|log|file|put|write|start)\s+(?:(?:a|an|the|this|that|these|those|new|another|some|two|three|following|it|them)\s+){0,3}(open[- ]?)?questions?\b/i.test(prompt)
+    || /\bopen\s+(a|an|new)\s+(?:\S+\s+){0,2}?questions?\b/i.test(prompt)
+    || /\b(crea|crear|añade|añadir|abre|abrir|pon|poner)\s+(?:(?:una|la|esta|esa|estas|nueva|otra|unas|las)\s+){0,3}(nueva\s+)?preguntas?\b/i.test(prompt)
 }
+
+// KA1106: a short yes to the question Claude quoted in chat after the prompt was dismissed.
+export function saidYes(prompt: string): boolean {
+  return /^\s*(yes|yeah|yep|y|ok|okay|sure|go ahead|go|do it|create it|please do|sí|si|vale|dale|claro)\b/i.test(prompt)
+}
+
+export const UNCONFIRMED_QUESTION = 'The user did not confirm this open question (the prompt was dismissed or could not be shown). Do not create it now. Quote its exact text in chat and ask whether to create it; create it only if they say yes.'
 
 // KA991: a typed answer to the meeting question, passed on to Claude instead of being dropped.
 export function freeMeetingAnswerInstruction(shortid: string, questionId: string, answer: string): string {

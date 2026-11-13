@@ -16,6 +16,8 @@ import {
   askMeeting,
   askCreate,
   askedForQuestion,
+  saidYes,
+  UNCONFIRMED_QUESTION,
   CREATE_IT,
   DECLINED_QUESTION,
   DONT_CREATE,
@@ -166,6 +168,8 @@ const clearArmed = atom({ plugin: 'karea', key: 'clearArmed' } as const, false)
 const snapshot = atom({ plugin: 'karea', key: 'snapshot' } as const, null)
 const chipNow = atom({ plugin: 'karea', key: 'chipNow' } as const, null)
 const lastPrompt = atom({ plugin: 'karea', key: 'lastPrompt' } as const, '')
+// KA1106: an open question was held back for a yes in chat.
+const questionPending = atom({ plugin: 'karea', key: 'questionPending' } as const, false)
 const turnWrote = atom({ plugin: 'karea', key: 'turnWrote' } as const, false)
 // KA813: a sync turn is under way; its Karea writes count only once the turn ends.
 const syncing = atom({ plugin: 'karea', key: 'syncing' } as const, false)
@@ -630,15 +634,18 @@ async function linkQuestionToMeeting($: EngineInterface, meetingId: string, ques
   return reasons.join('; ') || 'no Karea MCP server answered'
 }
 
-type QuestionPlan = Meeting | { answer: string } | { declined: true } | undefined
+type QuestionPlan = Meeting | { answer: string } | { declined: true } | { unconfirmed: true } | undefined
 
 async function meetingForQuestion($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<QuestionPlan> {
   if (kareaAction(tool, input) !== 'karea_create_question') return undefined
   const params = kareaParams(input)
   const project = typeof params.projectId === 'string' ? params.projectId : ''
   const question = typeof params.question === 'string' ? params.question : ''
-  const confirm = !askedForQuestion(await read($, lastPrompt))
-  return chooseMeeting($, QUESTION_MEETING_SETTING, project, question, confirm)
+  const prompt = await read($, lastPrompt)
+  const confirm = !askedForQuestion(prompt) && !((await read($, questionPending)) && saidYes(prompt))
+  const plan = await chooseMeeting($, QUESTION_MEETING_SETTING, project, question, confirm)
+  await update($, questionPending, () => plan !== undefined && 'unconfirmed' in plan)
+  return plan
 }
 
 async function linkCreatedQuestion(
@@ -659,36 +666,49 @@ async function linkCreatedQuestion(
   return linkInstruction(question.shortid, question.id, meeting.id, meetingLabel(meeting))
 }
 
-// KA1106: unless the user asked for the question, creating it needs their yes: picking a meeting or
-// "task only" is that yes, "Don't create it" refuses. A prompt that cannot be shown does not block.
-async function confirmCreate($: EngineInterface, question: string): Promise<boolean> {
+// KA1106: unless the user asked for the question, only an explicit yes creates it. A dismissed
+// prompt, or one that cannot be shown, is not a yes: Claude asks in chat instead.
+async function confirmCreate($: EngineInterface, question: string): Promise<'yes' | 'no' | 'unanswered'> {
   try {
-    return (await $.ui.ask(askCreate(question), { options: [CREATE_IT, DONT_CREATE], header: 'Question' })) !== DONT_CREATE
+    const answer = await $.ui.ask(askCreate(question), { options: [CREATE_IT, DONT_CREATE], header: 'Question' })
+    return answer === CREATE_IT ? 'yes' : answer === DONT_CREATE ? 'no' : 'unanswered'
   } catch {
-    return true
+    return 'unanswered'
   }
 }
+
+const refused = (answer: 'no' | 'unanswered'): QuestionPlan => (answer === 'no' ? { declined: true } : { unconfirmed: true })
 
 async function chooseMeeting($: EngineInterface, setting: string, project: string, question: string, confirm: boolean): Promise<QuestionPlan> {
   const none = setting.trim().toLowerCase() === 'none'
   if (none || setting.trim() !== '') {
-    if (confirm && !(await confirmCreate($, question))) return { declined: true }
+    if (confirm) {
+      const answer = await confirmCreate($, question)
+      if (answer !== 'yes') return refused(answer)
+    }
     return none ? undefined : pickMeeting(await upcomingMeetings($), setting, project)
   }
   const meetings = await upcomingMeetings($)
   const seen = new Set<string>()
   const next = meetings.filter(m => !seen.has(m.title) && (seen.add(m.title), true)).slice(0, confirm ? 2 : 3)
-  if (next.length === 0) return confirm && !(await confirmCreate($, question)) ? { declined: true } : undefined
-  const labels = next.map(meetingLabel)
-  try {
-    const answer = await $.ui.ask(askMeeting(question, confirm), { options: [...labels, NO_MEETING, ...(confirm ? [DONT_CREATE] : [])], header: 'Meeting' })
-    if (confirm && answer === DONT_CREATE) return { declined: true }
-    const picked = next[labels.indexOf(answer)]
-    if (picked) return picked
-    return answer && answer !== NO_MEETING && answer.trim() ? { answer: answer.trim() } : undefined
-  } catch {
-    return undefined
+  if (next.length === 0) {
+    if (!confirm) return undefined
+    const answer = await confirmCreate($, question)
+    return answer === 'yes' ? undefined : refused(answer)
   }
+  const labels = next.map(meetingLabel)
+  let answer: string
+  try {
+    answer = (await $.ui.ask(askMeeting(question, confirm), { options: [...labels, NO_MEETING, ...(confirm ? [DONT_CREATE] : [])], header: 'Meeting' })) ?? ''
+  } catch {
+    return confirm ? { unconfirmed: true } : undefined
+  }
+  if (confirm && answer === DONT_CREATE) return { declined: true }
+  const picked = next[labels.indexOf(answer)]
+  if (picked) return picked
+  if (answer === NO_MEETING) return undefined
+  if (answer.trim()) return { answer: answer.trim() }
+  return confirm ? { unconfirmed: true } : undefined
 }
 
 // Session start: the task this session had before it was closed, else the one Karea Connect started it for.
@@ -928,6 +948,10 @@ export const register: Register = (on, options) => {
     if (plan && 'declined' in plan) {
       $.ui.log('Open question not created: you said no.')
       return { deny: DECLINED_QUESTION }
+    }
+    if (plan && 'unconfirmed' in plan) {
+      $.ui.log('Open question held back: Claude will ask you in chat first.')
+      return { deny: UNCONFIRMED_QUESTION }
     }
     const meeting = plan
     const ran = await next(e)
