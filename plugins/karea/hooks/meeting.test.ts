@@ -256,3 +256,23 @@ test('KA1106: a plain yes with nothing held back still needs the prompt', { opti
   expect(seen).toHaveLength(1)
   expect(created).toEqual([])
 })
+
+test('claude -p / SDK: a question the prompt asked for is created though no prompt can be shown (KA1106)', { options: { questionMeeting: 'none' } }, async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  on('mcp.call', server([]))
+  on('prompt.submit', ($, e) => e as never)
+  on('tool.call', ($, e) => ((e as unknown as { tool: string }).tool === 'AskUserQuestion' ? ({ result: {}, text: '' } as never) : ({ result: '', text: CREATED } as never)))
+  await $.prompt.submit({ text: 'create an open question about the UAT refresh', origin: { kind: 'sdk' } } as never)
+  const ran = (await $.tool.call(CREATE as never)) as { deny?: string }
+  expect(ran.deny).toBeUndefined()
+})
+
+test('claude -p / SDK: a question nobody asked for is still held back', { options: { questionMeeting: 'none' } }, async ($, on) => {
+  mock.clock(on, { now: at(8, 9) })
+  on('mcp.call', server([]))
+  on('prompt.submit', ($, e) => e as never)
+  on('tool.call', ($, e) => ((e as unknown as { tool: string }).tool === 'AskUserQuestion' ? ({ result: {}, text: '' } as never) : ({ result: '', text: CREATED } as never)))
+  await $.prompt.submit({ text: 'fix the login bug', origin: { kind: 'sdk' } } as never)
+  const ran = (await $.tool.call(CREATE as never)) as { deny?: string }
+  expect(ran.deny).toContain('did not confirm')
+})

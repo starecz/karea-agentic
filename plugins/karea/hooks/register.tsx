@@ -883,6 +883,8 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin.kind
+    // KA1106: a claude -p / Agent SDK turn is the user's request too; the question gate reads it.
+    if (kind === 'sdk') await update($, lastPrompt, () => e.text)
     if (kind !== 'composer' && kind !== 'bridge') return next(e)
 
     await update($, lastPrompt, () => e.text)
