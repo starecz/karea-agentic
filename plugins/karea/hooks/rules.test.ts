@@ -316,3 +316,20 @@ test('KA1106: which prompts ask for an open question in so many words', async ()
   for (const yes of ['create an open question about the UAT refresh', 'Add a question to KA12 for the team', 'raise an open question on pricing', 'log open questions for these', 'crea una pregunta abierta']) expect(askedForQuestion(yes)).toBe(true)
   for (const no of ['fix the login bug', 'any open questions on this?', 'what is the question here', 'ask me if unsure', '', 'add the answers to the questions', 'make sure there are no questions left', 'write the code, any questions ask me', 'fix it and log what you did, questions later']) expect(askedForQuestion(no)).toBe(false)
 })
+
+import { isOlderVersion, outdatedNotice } from './rules'
+
+test('KA1192: isOlderVersion compares dotted versions', () => {
+  expect(isOlderVersion('0.4.4', '0.4.13')).toBe(true)
+  expect(isOlderVersion('0.4.13', '0.4.13')).toBe(false)
+  expect(isOlderVersion('0.4.13', '0.4.4')).toBe(false)
+  expect(isOlderVersion('0.4', '0.4.1')).toBe(true)
+  expect(isOlderVersion('1.0.0', '0.9.9')).toBe(false)
+  expect(isOlderVersion('', '0.4.13')).toBe(false)
+  expect(isOlderVersion('0.4.13', 'garbage')).toBe(false)
+})
+
+test('KA1192: outdatedNotice names both versions and auto-update', () => {
+  const t = outdatedNotice('0.4.4', '0.4.13')
+  expect(t.includes('0.4.4') && t.includes('0.4.13') && t.includes('auto-update')).toBe(true)
+})

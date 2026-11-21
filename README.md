@@ -9,6 +9,8 @@
 /plugin install karea@karea-agentic
 ```
 
+**Highly recommended: turn on auto-update.** Claude Code leaves it off for marketplaces outside its own, so without it you stay on an old version and miss fixes. Once: `/plugin`, Marketplaces, karea-agentic, Enable auto-update. The plugin also tells you at session start when a newer version is out.
+
 ## Plugins
 
 | Plugin | What it does |

@@ -803,3 +803,24 @@ export function shouldProposeStatus(
   if (!proposed || proposed === current) return false
   return !declined.includes(`${shortid}:${proposed}`)
 }
+
+// KA1192: Claude Code leaves auto-update off for third-party marketplaces, so an old copy can run for weeks.
+export const LATEST_MANIFEST_URL = 'https://raw.githubusercontent.com/starecz/karea-agentic/main/plugins/karea/.claude-plugin/plugin.json'
+
+/** True when version `mine` is older than `latest` (dotted numbers; anything unreadable is never older). */
+export function isOlderVersion(mine: string, latest: string): boolean {
+  const parse = (v: string) => (/^\d+(\.\d+)*$/.test(v.trim()) ? v.trim().split('.').map(Number) : null)
+  const a = parse(mine)
+  const b = parse(latest)
+  if (!a || !b) return false
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0
+    const y = b[i] ?? 0
+    if (x !== y) return x < y
+  }
+  return false
+}
+
+export function outdatedNotice(mine: string, latest: string): string {
+  return `Karea plugin ${mine} is out of date: ${latest} is out, with fixes. Update it: /plugin, Marketplaces, karea-agentic, Update marketplace. Turn on auto-update there too, so this does not happen again.`
+}

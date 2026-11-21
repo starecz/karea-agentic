@@ -17,6 +17,9 @@ import {
   askCreate,
   askedForQuestion,
   saidYes,
+  isOlderVersion,
+  outdatedNotice,
+  LATEST_MANIFEST_URL,
   UNCONFIRMED_QUESTION,
   CREATE_IT,
   DECLINED_QUESTION,
@@ -711,6 +714,22 @@ async function chooseMeeting($: EngineInterface, setting: string, project: strin
   return confirm ? { unconfirmed: true } : undefined
 }
 
+// KA1192: say so when this copy is older than the one on the marketplace.
+async function checkVersion($: EngineInterface) {
+  try {
+    const mine = String(JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).version ?? '')
+    const res = await $.http.fetch(LATEST_MANIFEST_URL)
+    if (!res.ok) return
+    const latest = String(JSON.parse(res.text).version ?? '')
+    if (!isOlderVersion(mine, latest)) return
+    const text = outdatedNotice(mine, latest)
+    $.ui.log(text)
+    $.ui.toast(text, { timeoutMs: 20000 })
+  } catch {
+    // offline, or GitHub unreachable: say nothing
+  }
+}
+
 // Session start: the task this session had before it was closed, else the one Karea Connect started it for.
 async function restoreTask($: EngineInterface) {
   const saved = await savedTask($, await currentSessionId($))
@@ -777,6 +796,7 @@ export const register: Register = (on, options) => {
     await update($, pending, list => list.filter(item => !item.startsWith('open question:')))
     await restoreTask($)
     await refreshChip($)
+    void checkVersion($)
     return next(e)
   })
 
