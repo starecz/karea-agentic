@@ -607,16 +607,23 @@ async function kareaSyncLoaded($: EngineInterface): Promise<boolean> {
 async function upcomingMeetings($: EngineInterface): Promise<Meeting[]> {
   const now = await $.clock.now()
   const to = new Date(now + 21 * 86400000).toISOString()
+  const failed: string[] = []
   for (const server of MEETING_SERVERS) {
     try {
       // KA990: every meeting that has not ended, so one under way today is offered too.
       const result = await $.mcp.call(server, 'karea_read', { action: 'karea_list_meetings', params: { scope: 'upcoming', to } })
-      if (result.isError) return []
-      return parseMeetings(result.content.map(block => block.text ?? '').join('\n'))
-    } catch {
-      continue
+      const text = result.content.map(block => block.text ?? '').join('\n')
+      if (result.isError) {
+        $.ui.log(`Could not list your meetings (${server}: ${text.slice(0, 120)}), so the question is not offered a meeting.`)
+        return []
+      }
+      return parseMeetings(text)
+    } catch (error) {
+      failed.push(`${server}: ${error instanceof Error ? error.message.slice(0, 80) : 'call failed'}`)
     }
   }
+  // KA1106: say why no meeting was offered instead of skipping the question silently.
+  $.ui.log(`Could not reach Karea to list your meetings (${failed.join('; ') || 'no Karea MCP server'}), so the question is not offered a meeting.`)
   return []
 }
 
@@ -695,6 +702,7 @@ async function chooseMeeting($: EngineInterface, setting: string, project: strin
   const seen = new Set<string>()
   const next = meetings.filter(m => !seen.has(m.title) && (seen.add(m.title), true)).slice(0, confirm ? 2 : 3)
   if (next.length === 0) {
+    if (meetings.length === 0) $.ui.log('No upcoming meetings in the next 3 weeks: the question is created without one.')
     if (!confirm) return undefined
     const answer = await confirmCreate($, question)
     return answer === 'yes' ? undefined : refused(answer)
