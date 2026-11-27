@@ -187,6 +187,8 @@ const WRITE_ACTION = /^karea_(create|edit|close|done|doing|quick|add|set|answer|
 
 export function kareaAction(tool: string, input: Record<string, unknown>): string | undefined {
   if (!KAREA_TOOL.test(tool)) return undefined
+  // KA1226: karea_help names an action only to describe it; it is a read.
+  if (/karea_help$/i.test(tool)) return 'karea_help'
   if (typeof input.action === 'string') return input.action
   const legacy = tool.match(/__(karea_\w+)$/)
   return legacy?.[1]
@@ -694,11 +696,13 @@ export type Meeting = { id: string; startAt: number; title: string; project: str
 export function parseMeetings(text: string): Meeting[] {
   const meetings: Meeting[] = []
   for (const line of text.split('\n')) {
-    const match = line.match(/^- (\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}) - (.+?) \(id: ([0-9a-f-]{36})\)(?: - \d+ open questions?(?:\(s\))?)?\s*$/)
+    // KA1226: the server writes the time zone after the time (KA1068) and " @ location" after the project.
+    const match = line.match(/^- (\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?: [A-Za-z][\w+\-]*(?:\/[\w+\-]+)*)? - (.+?) \(id: ([0-9a-f-]{36})\)(?: - \d+ open questions?(?:\(s\))?)?\s*$/)
     if (!match) continue
     const [, y, mo, d, h, mi, rest = '', id = ''] = match
-    const project = rest.match(/\[([^\]]+)\]\s*$/)?.[1] ?? ''
-    const title = rest.replace(/\s*\[[^\]]+\]\s*$/, '').trim()
+    const filed = rest.match(/^(.*?)\s*\[([^\]]+)\](?: @ .*)?$/)
+    const project = filed?.[2] ?? ''
+    const title = (filed?.[1] ?? rest).trim()
     meetings.push({ id, startAt: Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi)), title, project })
   }
   return meetings.sort((a, b) => a.startAt - b.startAt)

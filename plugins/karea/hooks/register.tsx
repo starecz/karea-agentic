@@ -772,6 +772,25 @@ async function autoPick($: EngineInterface, ref: string) {
   $.ui.log(`Karea task ${task.shortid}${task.title ? ` ${task.title}` : ''} is active in this session (from Karea Connect).`)
 }
 
+/**
+ * KA1210: in chat, every Karea item the reply names is a link to it. Added to
+ * the system prompt, so it holds whether or not the Karea skill was loaded.
+ */
+export const KAREA_LINKS_SECTION = {
+  id: 'karea:links',
+  scope: 'session',
+  text: [
+    '# Karea links in your replies',
+    'Whenever a reply to the user mentions a Karea item (task, subtask, open question, meeting, resource, project, reminder, note on a task), write it as a Markdown link to that item, never as a bare ID, title or UUID.',
+    '- Task: [KA123 Short title](https://karea.app/dashboard/task/<task UUID>)',
+    '- Open question: [KAQ3](https://karea.app/dashboard/questions?open=<question UUID>)',
+    '- Meeting: [Title](https://karea.app/dashboard/meetings?open=<meeting UUID>)',
+    '- Resource: [name](https://karea.app/dashboard/resources?open=<resource UUID>)',
+    '- Project: [Name](https://karea.app/dashboard/<project UUID>)',
+    'Take the URL from the "Link:" line the Karea tools return, or build it from the "ID:" line. If you do not have the UUID, look the item up with karea_read before you reply rather than leaving it unlinked.',
+  ].join('\n'),
+} as const
+
 export const register: Register = (on, options) => {
   QUESTION_MEETING_SETTING = String(options.questionMeeting ?? '')
 
@@ -789,6 +808,13 @@ export const register: Register = (on, options) => {
     writeStatusFile: options.statusFile === true,
   }
   const { hasApi, preset, extraPatterns, pollMs, showReceipts } = cfg
+
+  on('prompt.compose', async ($, e, next) => {
+    const r = await next(e)
+    if (r.sections.some((x) => x.id === KAREA_LINKS_SECTION.id)) return r
+    const base = api.baseUrl.replace(/\/+$/, '') || 'https://karea.app'
+    return { ...r, sections: [...r.sections, { ...KAREA_LINKS_SECTION, text: KAREA_LINKS_SECTION.text.split('https://karea.app').join(base) }] }
+  })
 
   on('session.start', async ($, e, next) => {
     await $.command

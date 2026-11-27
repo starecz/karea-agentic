@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { parseMeetings, pickMeeting } from './rules'
+import { isKareaWrite, kareaAction, parseMeetings, pickMeeting } from './rules'
 
 const LIST = [
   'Meetings (6):',
@@ -275,4 +275,27 @@ test('claude -p / SDK: a question nobody asked for is still held back', { option
   await $.prompt.submit({ text: 'fix the login bug', origin: { kind: 'sdk' } } as never)
   const ran = (await $.tool.call(CREATE as never)) as { deny?: string }
   expect(ran.deny).toContain('did not confirm')
+})
+
+test('KA1226: reads the lines the server writes now, with the time zone and a location', async () => {
+  const text = [
+    'Meetings (3):',
+    '- 2026-11-26 14:00 Europe/Madrid - JJJQ : Assisted Service Refinement Call [JnJ] (id: bbbbbbbb-0000-4000-8000-000000000001)',
+    '- 2026-11-30 13:30 America/Argentina/Buenos_Aires - SFDC Deliver - Weekly Connect [JnJ] @ Room 4 (id: bbbbbbbb-0000-4000-8000-000000000002) - 2 open question(s)',
+    '- 2026-12-01 09:00 UTC - Dentist (id: bbbbbbbb-0000-4000-8000-000000000003)',
+  ].join('\n')
+  const meetings = parseMeetings(text)
+  expect(meetings).toHaveLength(3)
+  expect(meetings[0]).toEqual({ id: 'bbbbbbbb-0000-4000-8000-000000000001', startAt: Date.UTC(2026, 10, 26, 14, 0), title: 'JJJQ : Assisted Service Refinement Call', project: 'JnJ' })
+  expect(meetings[1]).toEqual({ id: 'bbbbbbbb-0000-4000-8000-000000000002', startAt: Date.UTC(2026, 10, 30, 13, 30), title: 'SFDC Deliver - Weekly Connect', project: 'JnJ' })
+  expect(meetings[2]?.title).toBe('Dentist')
+  expect(pickMeeting(meetings, 'weekly connect', 'JnJ')?.id).toBe('bbbbbbbb-0000-4000-8000-000000000002')
+})
+
+test('KA1226: karea_help about karea_create_question is a read, not a question create', async () => {
+  const input = { action: 'karea_create_question' }
+  expect(kareaAction('mcp__karea__karea_help', input)).toBe('karea_help')
+  expect(isKareaWrite('mcp__karea__karea_help', input)).toBe(false)
+  expect(kareaAction('mcp__claude_ai_Karea__karea_help', input)).toBe('karea_help')
+  expect(kareaAction('mcp__karea__karea_meetings_write', { action: 'karea_create_question', params: {} })).toBe('karea_create_question')
 })
